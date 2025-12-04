@@ -177,24 +177,25 @@ bash run_eval_via_guided_diffusion.sh $OUTPUT_IMAGES_DIR
 # e.g.,
 bash run_eval_via_guided_diffusion.sh outputs/train/sfd_xl/lightningdit-xl-1-ckpt-4000000-dopri5-250-balanced
 ```
+Note that our models were trained and evaluated on 16 NPUs (consistent with the results reported in our paper). When testing on 8 A100 GPUs, we observed minor performance variations. The detailed results are presented below:
 
-Note that our models were trained and evaluated on NPUs (consistent with the results in the paper), but we observed minor performance differences when testing on GPUs. The specific results are shown below:
-
-*w/o Guidance*
+**Without Guidance**
 | Model | Epochs | #Params | FID (NPU) | FID (GPU) |
 |-------|--------|---------|-----------|-----------|
-| SFD (XL) | 80 | 675M | 3.43 | 3.50 |
-| SFD (XL) | 800 | 675M | 2.54 | 2.66 |
-| SFD (XXL) | 80 | 1.0B | 2.84 | 2.92 |
-| SFD (XXL) | 800 | 1.0B | 2.38 | 2.36 |
+| SFD-XL | 80 | 675M | 3.43 | 3.50 |
+| SFD-XL | 800 | 675M | 2.54 | 2.66 |
+| SFD-XXL | 80 | 1.0B | 2.84 | 2.92 |
+| SFD-XXL | 800 | 1.0B | 2.38 | 2.36 |
 
-*w/ Guidance*
+**With Guidance**
 | Model | Epochs | #Params | FID (NPU) | FID (GPU) |
 |-------|--------|---------|-----------|-----------|
-| SFD (XL) | 80 | 675M | 1.30 | 1.29 |
-| SFD (XL) | 800 | 675M | 1.06 | 1.03 |
-| SFD (XXL) | 80 | 1.0B | 1.19 | 1.20 |
-| SFD (XXL) | 800 | 1.0B | 1.04 | 1.04 |
+| SFD-XL | 80 | 675M | 1.30 | 1.29 |
+| SFD-XL | 800 | 675M | 1.06 | 1.03 |
+| SFD-XXL | 80 | 1.0B | 1.19 | 1.20 |
+| SFD-XXL | 800 | 1.0B | 1.04 | 1.04 |
+
+These slight discrepancies are likely due to numerical precision differences between hardware platforms, but the overall performance remains consistent.
 
 
 ## Acknowledgements
