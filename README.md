@@ -127,7 +127,7 @@ Images will be saved into demo_images/demo_samples.png, e.g. the following one:
   <img src="demo_images/demo_samples.png" width="90%">
 </p>
 
-**Inference on ImageNet 256x256**
+**Inference 50K samples**
 
 For without AutoGuidance, run the following command:
 ```bash
