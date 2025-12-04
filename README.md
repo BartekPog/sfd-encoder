@@ -54,7 +54,7 @@ On ImageNet 256×256, **SFD** demonstrates both superior quality and remarkable 
 ## 🛠️ To-Do List
 
 - [x] Inference code and model weights
-- [ ] Training code of Semantic VAE and diffusion model (SFD)
+- [ ] Training code of Semantic VAE and diffusion model (SFD) at different scales
 
 ## 🧾 Results
 
