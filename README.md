@@ -58,7 +58,7 @@
   <img src="images/teaser_v5.png" width="90%">
 </p>
 
-Latent Diffusion Models (LDMs) inherently follow a coarse-to-fine generation process, where high-level semantic structure is generated slightly earlier than fine-grained texture. This indicates the preceding semantics potentially benefit the texture generation by providing a semantic anchor. Recent advances have integrated semantic priors from pretrained visual encoders to further enhance LDMs, yet they still denoise semantic and VAE-encoded texture synchronously, neglecting such ordering. 
+Latent Diffusion Models (LDMs) inherently follow a coarse-to-fine generation process, where high-level semantic structure is generated slightly earlier than fine-grained texture. This indicates the preceding semantics potentially benefit the texture generation by providing a semantic anchor. However, existing methods denoise semantic and texture latents synchronously, overlooking this natural ordering.
 
 We propose **Semantic-First Diffusion (SFD)**, a latent diffusion paradigm that explicitly prioritizes semantic formation. SFD constructs composite latents by combining compact semantic representations from a pretrained visual encoder (via a **Semantic VAE**) with texture latents, and performs asynchronous denoising with separate noise schedules: semantics denoise earlier to guide texture refinement.
 During denoising, SFD operates in three phases: 
@@ -79,6 +79,12 @@ On ImageNet 256×256, **SFD** demonstrates both superior quality and remarkable 
 - [ ] Training code of Semantic VAE and diffusion model (SFD)
 
 ## 🧾 Results
+Explicitly **leading semantics ahead of textures with a moderate offset (Δt = 0.3)** achieves an optimal balance between early semantic stabilization and texture collaboration, effectively harmonizing their joint modeling.
+<p align="center">
+  <img src="images/fid_vs_delta_t.png" width="55%">
+</p>
+
+---
 
 - On ImageNet 256×256, **SFD** achieves **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL).  
 - **100×** and **33.3×** faster training convergence compared to DiT and LightningDiT, respectively.
