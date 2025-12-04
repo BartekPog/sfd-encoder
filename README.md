@@ -39,25 +39,25 @@ Latent Diffusion Models (LDMs) inherently follow a coarse-to-fine generation pro
 
 Observing these, we propose **Semantic-First Diffusion (SFD)**, a latent diffusion paradigm that explicitly prioritizes semantic formation. SFD first constructs composite latents by combining the compact semantic latent, which is extracted from pretrained visual encoder via a dedicated **Semantic VAE**, with the texture latent. The core of SFD is to denoise the semantic and texture latents **asynchronously** using separate noise schedules: semantics precede textures by a temporal offset, providing clearer high-level guidance for texture refinement and enabling natural coarse-to-fine generation. 
 During denoising, SFD operates in three phases: 
-<span style="color:#d62728;">Stage I – Semantic initialization</span>, where semantic latents denoise first;
-<span style="color:rgb(68,114,196);">Stage II – Asynchronous generation</span>, where semantics and textures denoise jointly but asynchronously, with semantics ahead of textures;
-<span style="color:#2ca02c;">Stage III – Texture completion</span>, where only textures continue refining.
-After denoising, the generated semantic latent $\mathbf{s}_1$ is discarded, and the final image is decoded solely from the texture latent $\mathbf{z}_1$.
+**Stage I – Semantic initialization**, where semantic latents denoise first;
+**Stage II – Asynchronous generation**, where semantics and textures denoise jointly but asynchronously, with semantics ahead of textures;
+**Stage III – Texture completion**, where only textures continue refining.
+After denoising, the generated semantic latent is discarded, and the final image is decoded solely from the texture latent.
 
-On ImageNet 256×256, **Semantic-First Diffusion (SFD)** demonstrates both superior quality and remarkable convergence acceleration.  SFD achieves state-of-the-art **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL), while exhibiting approximately **100×** and **33.3×** faster training convergence compared to **DiT** and **LightningDiT**, respectively.  Furthermore, incorporating SFD into existing frameworks such as **ReDi** and **VA-VAE** consistently yields additional improvements, validating the effectiveness of asynchronous, semantics-led modeling.
+On ImageNet 256×256, **SFD** demonstrates both superior quality and remarkable convergence acceleration.  SFD achieves state-of-the-art **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL), while exhibiting approximately **100×** and **33.3×** faster training convergence compared to **DiT** and **LightningDiT**, respectively.  Furthermore, SFD also improves existing methods like ReDi and VA-VAE, demonstrating the effectiveness of asynchronous, semantics-led modeling.
 
 ## 🗞️ News
 
-- **[2025.12.05]** Released inference code and pre-trained model weights of SFD (LightningDiT-XL and LightningDiT-XXL) on ImageNet 256×256. 
+- **[2025.12.05]** Released inference code and pre-trained model weights of SFD on ImageNet 256×256. 
 
 ## 🛠️ To-Do List
 
-- [x] **Inference code and model weights**
-- [ ] **Training code of Semantic VAE and diffusion model (SFD)**
+- [x] Inference code and model weights
+- [ ] Training code of Semantic VAE and diffusion model (SFD)
 
 ## 🧾 Results
 
-- On ImageNet 256×256 with guidance, **SFD** achieves **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL).  
+- On ImageNet 256×256, **SFD** achieves **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL).  
 - **100×** and **33.3×** faster training convergence compared to DiT and LightningDiT, respectively.
 
 <p align="center">
