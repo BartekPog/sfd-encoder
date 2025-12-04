@@ -179,7 +179,7 @@ bash run_eval_via_guided_diffusion.sh outputs/train/sfd_xl/lightningdit-xl-1-ckp
 ```
 Note that our models were trained and evaluated on 16 NPUs (consistent with the results reported in our paper). When testing on 8 A100 GPUs, we observed minor performance variations. The detailed results are presented below:
 
-**Without Guidance**
+**Without AutoGuidance**
 | Model | Epochs | #Params | FID (NPU) | FID (GPU) |
 |-------|--------|---------|-----------|-----------|
 | SFD-XL | 80 | 675M | 3.43 | 3.50 |
@@ -187,7 +187,7 @@ Note that our models were trained and evaluated on 16 NPUs (consistent with the 
 | SFD-XXL | 80 | 1.0B | 2.84 | 2.92 |
 | SFD-XXL | 800 | 1.0B | 2.38 | 2.36 |
 
-**With Guidance**
+**With AutoGuidance**
 | Model | Epochs | #Params | FID (NPU) | FID (GPU) |
 |-------|--------|---------|-----------|-----------|
 | SFD-XL | 80 | 675M | 1.30 | 1.29 |
