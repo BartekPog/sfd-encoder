@@ -45,6 +45,12 @@
   <img src="images/demo_Sample.png" width="85%">
 </p>
 
+## ✨ Highlights
+
+- We propose **Semantic-First Diffusion (SFD)**, a novel latent diffusion paradigm that performs asynchronous denoising on semantic and texture latents, allowing semantics to denoise earlier and subsequently guide texture generation.  
+- **SFD achieves state-of-the-art FID score of 1.04** on ImageNet 256×256 generation.  
+- Exhibits **100×** and **33.3× faster** training convergence compared to **DiT** and **LightningDiT**, respectively.
+
 
 ## 🚩 Overview
 
@@ -54,14 +60,14 @@
 
 Latent Diffusion Models (LDMs) inherently follow a coarse-to-fine generation process, where high-level semantic structure is generated slightly earlier than fine-grained texture. This indicates the preceding semantics potentially benefit the texture generation by providing a semantic anchor. Recent advances have integrated semantic priors from pretrained visual encoders to further enhance LDMs, yet they still denoise semantic and VAE-encoded texture synchronously, neglecting such ordering. 
 
-Observing these, we propose **Semantic-First Diffusion (SFD)**, a latent diffusion paradigm that explicitly prioritizes semantic formation. SFD first constructs composite latents by combining the compact semantic latent, which is extracted from pretrained visual encoder via a dedicated **Semantic VAE**, with the texture latent. The core of SFD is to denoise the semantic and texture latents **asynchronously** using separate noise schedules: semantics precede textures by a temporal offset, providing clearer high-level guidance for texture refinement and enabling natural coarse-to-fine generation. 
+We propose **Semantic-First Diffusion (SFD)**, a latent diffusion paradigm that explicitly prioritizes semantic formation. SFD constructs composite latents by combining compact semantic representations from a pretrained visual encoder (via a **Semantic VAE**) with texture latents, and performs asynchronous denoising with separate noise schedules: semantics denoise earlier to guide texture refinement.
 During denoising, SFD operates in three phases: 
 **Stage I – Semantic initialization**, where semantic latents denoise first;
 **Stage II – Asynchronous generation**, where semantics and textures denoise jointly but asynchronously, with semantics ahead of textures;
 **Stage III – Texture completion**, where only textures continue refining.
-After denoising, the generated semantic latent is discarded, and the final image is decoded solely from the texture latent.
+After denoising, only the texture latent is decoded for the final image.
 
-On ImageNet 256×256, **SFD** demonstrates both superior quality and remarkable convergence acceleration.  SFD achieves state-of-the-art **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL), while exhibiting approximately **100×** and **33.3×** faster training convergence compared to **DiT** and **LightningDiT**, respectively.  Furthermore, SFD also improves existing methods like ReDi and VA-VAE, demonstrating the effectiveness of asynchronous, semantics-led modeling.
+On ImageNet 256×256, **SFD** demonstrates both superior quality and remarkable convergence acceleration.  SFD achieves state-of-the-art **FID 1.06** (LightningDiT-XL) and **FID 1.04** (1.0B LightningDiT-XXL), while exhibiting approximately **100×** and **33.3×** faster training convergence compared to **DiT** and **LightningDiT**, respectively. SFD also improves existing methods like ReDi and VA-VAE, demonstrating the effectiveness of asynchronous, semantics-led modeling.
 
 ## 🗞️ News
 
@@ -217,7 +223,7 @@ These slight discrepancies are likely due to numerical precision differences bet
 
 ## Acknowledgements
 
-Our code is based on [LightningDiT](https://github.com/hustvl/LightningDiT) and [REPA](https://github.com/sihyun-yu/REPA) repositories.  We sincerely thank the authors for releasing their code.  
+Our code is based on [LightningDiT](https://github.com/hustvl/LightningDiT), [REPA](https://github.com/sihyun-yu/REPA) and [ADM](https://github.com/openai/guided-diffusion) repositories.  We sincerely thank the authors for releasing their code.  
 
 
 <!-- ## 🔗 Citation
