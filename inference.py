@@ -496,7 +496,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         if demo_sample_mode:
             if accelerator.process_index == 0:
                 images = []
-                for label in tqdm([36, 22, 279, 975, 388, 15, 1, 979], desc="Generating Demo Samples"):
+                for label in tqdm([108, 22, 106, 975, 388, 15, 36, 979], desc="Generating Demo Samples"):
                     z = torch.randn(1, model.in_channels, latent_size, latent_size, device=device)
                     y = torch.tensor([label], device=device)
 
