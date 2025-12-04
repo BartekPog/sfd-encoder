@@ -1,8 +1,8 @@
 <h1 align="center"> Semantics Lead the Way: Harmonizing Semantic and Texture Modeling with Asynchronous Latent Diffusion</h1>
 
 <p align="center">
-<strong>Yueming Pan<sup>1,2‡</sup></strong>, <strong>Ruoyu Feng<sup>3‡</sup></strong>, <strong>Qi Dai<sup>2</sup></strong>, <strong>Yuqi Wang<sup>3</sup></strong>, <strong>Wenfeng Lin<sup>3</sup></strong>, <strong>Mingyu Guo<sup>3</sup></strong>, <strong>Chong Luo<sup>2†</sup></strong>, <strong>Nanning Zheng<sup>1†</sup></strong>
-
+<strong>Yueming Pan<sup>1,2‡</sup></strong>, <strong>Ruoyu Feng<sup>3‡</sup></strong>, <strong>Qi Dai<sup>2</sup></strong>, <strong>Yuqi Wang<sup>3</sup></strong>, <strong>Wenfeng Lin<sup>3</sup></strong>, <br>
+<strong>Mingyu Guo<sup>3</sup></strong>, <strong>Chong Luo<sup>2†</sup></strong>, <strong>Nanning Zheng<sup>1†</sup></strong>
 </p>
 
 <p align="center">
