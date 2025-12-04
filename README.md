@@ -128,9 +128,9 @@ Images will be saved into demo_images/demo_samples.png, e.g. the following one:
 
 **Inference on ImageNet 256x256**
 
-For w/o Guidance, run the following command:
+For without AutoGuidance, run the following command:
 ```bash
-# w/o Guidance
+# w/o AutoGuidance
 FID_NUM=50000 \
 GPUS_PER_NODE=$GPU_NUM PRECISION=bf16 bash run_inference.sh \
     $INFERENCE_CONFIG
@@ -142,9 +142,9 @@ GPUS_PER_NODE=8 PRECISION=bf16 bash run_inference.sh \
 ```
 More inference configs can be found in `configs/sfd/lightningdit_xl` and `configs/sfd/lightningdit_1p0`, corresponding to XL (675M) and XXL (1.0B) models, respectively.
 
-For w/ Guidance, run the following command:
+For with AutoGuidance, run the following command:
 ```bash
-# w/ Guidance
+# w/ AutoGuidance
 CFG_SCALE="$GUIDANCE_SCALE" \
 AUTOGUIDANCE_MODEL_SIZE="b" \
 AUTOGUIDANCE_CKPT_ITER="$GUIDANCE_ITER" \
@@ -160,7 +160,7 @@ FID_NUM=50000 \
 GPUS_PER_NODE=8 PRECISION=bf16 bash run_inference.sh \
     configs/sfd/lightningdit_xl/inference_4m_autoguidance.yaml
 ```
-More inference configs can be found in `configs/sfd/lightningdit_xl` and `configs/sfd/lightningdit_1p0`, corresponding to XL (675M) and XXL (1.0B) models, respectively. For w/ Guidance, the detailed parameters for each configuration are shown in the following table:
+More inference configs can be found in `configs/sfd/lightningdit_xl` and `configs/sfd/lightningdit_1p0`, corresponding to XL (675M) and XXL (1.0B) models, respectively. For with AutoGuidance, the detailed parameters for each configuration are shown in the following table:
 
 | Model | Epochs | Params | Degraded Model | Iterations | Guidance Scale |
 |-------|--------|--------|----------------|------------|----------------|
