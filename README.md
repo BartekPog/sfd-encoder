@@ -35,7 +35,7 @@
 
 </div> -->
 <p align="center">
-  <a href="https://arxiv.org/abs/你的论文编号"><img src="https://img.shields.io/badge/arXiv-2511.xxxxx-b31b1b.svg"></a>
+  <a href="https://arxiv.org/abs/2512.04926"><img src="https://img.shields.io/badge/arXiv-2512.04926-b31b1b.svg"></a>
   <a href="https://yuemingpan.github.io/SFD.github.io/"><img src="https://img.shields.io/badge/Project-Page-green.svg"></a>
   <a href="https://huggingface.co/YuemingPan/SFD"><img src="https://img.shields.io/badge/HuggingFace-Model-yellow.svg"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
@@ -231,7 +231,7 @@ These slight discrepancies are likely due to numerical precision differences bet
 Our code is based on [LightningDiT](https://github.com/hustvl/LightningDiT), [REPA](https://github.com/sihyun-yu/REPA) and [ADM](https://github.com/openai/guided-diffusion) repositories.  We sincerely thank the authors for releasing their code.  
 
 
-<!-- ## 🔗 Citation
+## 🔗 Citation
 
 If you find our work, this repository, or pretrained models useful, please consider giving a star ⭐ and citing:
 
@@ -239,8 +239,8 @@ If you find our work, this repository, or pretrained models useful, please consi
 @article{Pan2025SFD,
   title={Semantics Lead the Way: Harmonizing Semantic and Texture Modeling with Asynchronous Latent    Diffusion},
   author={Pan, Yueming and Feng, Ruoyu and Dai, Qi and Wang, Yuqi and Lin, Wenfeng and Guo, Mingyu and Luo, Chong and Zheng, Nanning},
-  journal={arXiv preprint arXiv:2504.16064},
+  journal={arXiv preprint arXiv:2512.04926},
   year={2025}
-} -->
+}
 
 
