@@ -1,0 +1,78 @@
+# Global variables
+variables:
+  output_root: "outputs/semantic_vae/dinov2_vitb14_reg/transformer_ch16"
+  bottleneck_dim: 16
+  model_name: "dinov2_vitb14_reg"
+
+model:
+  variational: true 
+  bottleneck_dim: ${variables.bottleneck_dim} 
+
+  # Architecture
+  # arch: "linear"
+  # params:
+  #   placeholder: 0
+
+  # arch: "mlp"
+  # params:
+  #   num_layers: 3
+
+  # arch: "resnet"
+  # params:
+  #   num_layers: 3
+  #   num_res_blocks: 2
+
+  arch: "transformer"
+  params:
+    hidden_dim: 768     # same to feature extracter's hidden dim
+    transformer_heads: 6
+    transformer_blocks: 4
+
+data:
+  feature_dir: "outputs/dataset/imagenet-dinov2/train"
+  model_name: "${variables.model_name}" 
+  max_samples: 1281167 
+  
+  batch_size: 64
+  num_workers: 4
+  shuffle: true
+
+training:
+  mixed_precision: "bf16"
+  max_epochs: 10000000000
+  total_iterations: 1_000_000
+  
+  checkpoint_path: ""
+  
+  optimizer:
+    type: "AdamW"
+    lr: 5e-5
+  
+  scheduler:
+    warmup_steps: 500
+    constant_steps: 800_000
+  
+  loss:
+    mse_weight: 1.0
+    cos_weight: 1.0
+    l1_weight: 0.0
+    kl_weight: 1e-7
+    classification_weight: 0.0  
+  
+  checkpointing:
+    save_every: 100000
+    checkpoint_dir: "${variables.output_root}/checkpoints"
+  
+  evaluation:
+    feature_dir: "outputs/dataset/imagenet-dinov2/val"
+    model_name: "${variables.model_name}"
+    max_samples: 500
+    batch_size: 64
+    eval_every: 2000
+    output_dir: "${variables.output_root}/eval"
+  
+  log:
+    log_dir: "${variables.output_root}"
+    log_every: 100
+    swandb_exp_name: "arch_transformer_ch${variables.bottleneck_dim}"
+

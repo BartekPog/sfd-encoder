@@ -76,7 +76,7 @@ Explicitly **leading semantics ahead of textures with a moderate offset (Δt = 0
 
 
 
-## 🎯 Usage
+## 🎯 Inference with Pre-Trained Model Weights
 
 ### 1. Prepare Environments
 ```bash
@@ -206,6 +206,87 @@ Note that our models were trained and evaluated on 16 NPUs (consistent with the 
 | SFD-XXL | 800 | 1.0B | 1.04 | 1.04 |
 
 These slight discrepancies are likely due to numerical precision differences between hardware platforms, but the overall performance remains consistent.
+
+
+## 🎯 Instruction of Training
+
+### Prepare Training Data
+```text
+outputs/
+└── dataset/
+    └── imagenet1k-folder/
+        ├── train/
+        │   ├── n01440764/
+        │   ├── n01443537/
+        │   ├── n01484850/
+        │   └── ...
+        └── val/
+            ├── n01440764/
+            ├── n01443537/
+            ├── n01484850/
+            └── ...
+```
+
+```bash
+# Pre-extract features of DINOv2-B
+# Train set (total number is 1281167); 
+python tokenizer/semvae/extract_dinov2_feature.py \
+    --data_root outputs/dataset/imagenet1k-folder/train \
+    --output_root outputs/dataset/imagenet-dinov2/train \
+    --model_name dinov2_vitb14_reg \
+    --max_samples 1281167 \
+    --batch_size 64 \
+    --shuffle
+
+# Eval set (For VAE training)
+python tokenizer/semvae/extract_dinov2_feature.py \
+    --data_root outputs/dataset/imagenet1k-folder/val \
+    --output_root outputs/dataset/imagenet-dinov2/val \
+    --model_name dinov2_vitb14_reg \
+    --max_samples 500 \
+    --batch_size 64
+```
+
+
+### Prepare SemVAE and extract features
+You can use our provided SemVAE via downloading it from huggingface:
+```bash
+mkdir -p outputs/semantic_vae
+huggingface-cli download SFD-Project/SFD --include "semantic_vae/*" --local-dir outputs/semantic_vae
+```
+
+or train it by the following command:
+```bash
+python tokenizer/semvae/train.py --config tokenizer/configs/semvae_train/ch16.yaml
+```
+Then you can find trained SemVAE in `outputs/semantic_vae/dinov2_vitb14_reg/transformer_ch16`.
+
+Pre-extract features for diffusion model training. Ensure you have space larger than 1TB.
+```bash
+# change GPU_NUM to the number of GPUs you have
+GPUS_PER_NODE=$GPU_NUM bash run_extraction.sh tokenizer/configs/sdvae_f16d32_semvaebasech16.yaml semvae dinov2_vitb14_reg
+```
+
+### Train Diffusion Model
+```bash
+# The diffusion model
+GPUS_PER_NODE=$GPU_NUM PRECISION=bf16 bash run_train.sh configs/sfd/lightningdit_xl/train_80ep_lr2e-4.yaml
+# The autoguidance model
+# Note that this will cover the previous checkpoints in outputs/train/sfd_autoguidance_b
+GPUS_PER_NODE=$GPU_NUM PRECISION=bf16 bash run_train.sh configs/sfd/autoguidance_b/train.yaml
+```
+
+### Evaluate Trained Model
+```bash
+FID_NUM=50000 \
+GPUS_PER_NODE=$GPU_NUM PRECISION=bf16 bash run_inference.sh \
+    configs/sfd/lightningdit_xl/inference_80ep_lr2e-4.yaml
+
+FID_NUM=50000 \
+GPUS_PER_NODE=8 PRECISION=bf16 bash run_inference.sh \
+    configs/sfd/lightningdit_xl/inference_80ep_lr2e-4_autoguidance.yaml
+```
+We tested the pipeline and achieved FID 3.23 without guidance and FID 1.38 with guidance on H20 GPU cards.
 
 
 ## Acknowledgements
