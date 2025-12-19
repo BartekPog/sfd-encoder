@@ -287,7 +287,7 @@ FID_NUM=50000 \
 GPUS_PER_NODE=8 PRECISION=bf16 bash run_inference.sh \
     configs/sfd/lightningdit_xl/inference_80ep_lr2e-4_autoguidance.yaml
 ```
-We tested the pipeline and achieved FID 3.23 without guidance and FID 1.38 with guidance on H20 GPU cards.
+We tested the pipeline and achieved FID 3.23 without guidance and FID 1.38 with guidance on 8 H20 GPU cards.
 
 
 ## Acknowledgements
