@@ -84,6 +84,7 @@ conda create -n sfd python=3.10.12
 conda activate sfd
 pip install -r requirements.txt
 pip install numpy==1.24.3 protobuf==3.20.0
+pip install piqa
 ## guided-diffusion evaluation environment
 git clone https://github.com/openai/guided-diffusion.git
 pip install tensorflow==2.8.0
