@@ -54,11 +54,12 @@ On ImageNet 256×256, **SFD** demonstrates both superior quality and remarkable 
 ## 🗞️ News
 
 - **[2025.12.05]** Released inference code and pre-trained model weights of SFD on ImageNet 256×256. 
+- **[2025.12.21]** Released training code of Semantic VAE and diffusion model (SFD).
 
 ## 🛠️ To-Do List
 
 - [x] Inference code and model weights
-- [ ] Training code of Semantic VAE and diffusion model (SFD)
+- [x] Training code of Semantic VAE and diffusion model (SFD)
 
 ## 🧾 Results
 Explicitly **leading semantics ahead of textures with a moderate offset (Δt = 0.3)** achieves an optimal balance between early semantic stabilization and texture collaboration, effectively harmonizing their joint modeling.
