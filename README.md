@@ -253,7 +253,7 @@ python tokenizer/semvae/extract_dinov2_feature.py \
 You can use our provided SemVAE via downloading it from huggingface:
 ```bash
 mkdir -p outputs/semantic_vae
-huggingface-cli download SFD-Project/SFD --include "semantic_vae/*" --local-dir outputs/semantic_vae
+huggingface-cli download SFD-Project/SFD --include "semantic_vae/*" --local-dir outputs
 ```
 
 or train it by the following command:
