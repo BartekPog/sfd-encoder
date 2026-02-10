@@ -27,16 +27,16 @@ from tqdm import tqdm
 from omegaconf import OmegaConf
 
 from diffusers.models import AutoencoderKL
-from models.lightningdit import LightningDiT_models
+from models import gen_models
 from transport import create_transport, Sampler
 from accelerate import Accelerator
 from dataset.img_latent_dataset import ImgLatentDataset
 
-enable_swandb = False
-if enable_swandb:
-    # pip install swanlab
-    import swanlab
-    swanlab.login(api_key="YOUR_SWANLAB_KEY", save=True)
+enable_wandb = False
+if enable_wandb:
+    # pip install wandb
+    import wandb
+    wandb.login()
 
 def do_train(train_config, accelerator):
     """
@@ -79,7 +79,7 @@ def do_train(train_config, accelerator):
         downsample_ratio = 16
     assert train_config['data']['image_size'] % downsample_ratio == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = train_config['data']['image_size'] // downsample_ratio
-    model = LightningDiT_models[train_config['model']['model_type']](
+    model = gen_models[train_config['model']['model_type']](
         input_size=latent_size,
         class_dropout_prob=train_config['model']['class_dropout_prob'] if 'class_dropout_prob' in train_config['model'] else 0.1,
         num_classes=train_config['data']['num_classes'],
@@ -245,7 +245,16 @@ def do_train(train_config, accelerator):
             model_kwargs = dict(y=y)
             # loss_dict = transport.training_losses(model, x, model_kwargs)
             use_repa=train_config['model']['use_repa'] if 'use_repa' in train_config['model'] else False
-            loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
+            use_hidden = train_config['model'].get('use_hidden_tokens', False)
+            if use_hidden:
+                hidden_weight = train_config['model'].get('hidden_weight', 1.0)
+                loss_dict = transport.training_losses_hidden(
+                    model, x, model_kwargs,
+                    use_repa=use_repa, feature_dino=feature_dino,
+                    hidden_weight=hidden_weight,
+                )
+            else:
+                loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
             # if 'cos_loss' in loss_dict:
             #     mse_loss = loss_dict["loss"].mean()
             #     loss = loss_dict["cos_loss"].mean() + mse_loss
@@ -261,6 +270,10 @@ def do_train(train_config, accelerator):
                 loss = loss_dict["cos_loss"].mean() + mse_loss
             else:
                 loss = loss_dict["loss"].mean()
+            # Add hidden denoising loss if present (from training_losses_hidden)
+            if 'hidden_loss' in loss_dict:
+                hidden_loss = loss_dict["hidden_loss"].mean()
+                loss = loss + hidden_loss
             opt.zero_grad()
             accelerator.backward(loss)
             if 'max_grad_norm' in train_config['optimizer']:
@@ -294,19 +307,22 @@ def do_train(train_config, accelerator):
                 if accelerator.is_main_process:
                     logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                     writer.add_scalar('Loss/train', avg_loss, train_steps)
-                    # Log loss to swanlab
-                    if enable_swandb:
-                        swandb_losses = {'avg_loss': avg_loss}
-                        swandb_losses['mse_loss'] = loss_dict["loss"].mean().item()
-                        swandb_losses['total_loss'] = swandb_losses['mse_loss']
+                    # Log loss to wandb
+                    if enable_wandb:
+                        wandb_losses = {'avg_loss': avg_loss}
+                        wandb_losses['mse_loss'] = loss_dict["loss"].mean().item()
+                        wandb_losses['total_loss'] = wandb_losses['mse_loss']
                         if 'cos_loss' in loss_dict:
-                            swandb_losses['cos_loss'] = loss_dict["cos_loss"].mean().item()
-                            swandb_losses['total_loss'] += swandb_losses['cos_loss']
+                            wandb_losses['cos_loss'] = loss_dict["cos_loss"].mean().item()
+                            wandb_losses['total_loss'] += wandb_losses['cos_loss']
                         if 'repa_loss' in loss_dict:
-                            swandb_losses['repa_loss'] = loss_dict["repa_loss"].mean().item()
-                            swandb_losses['total_loss'] += swandb_losses['repa_loss']
-                        # print(swandb_losses)
-                        swanlab.log(swandb_losses, step=train_steps)
+                            wandb_losses['repa_loss'] = loss_dict["repa_loss"].mean().item()
+                            wandb_losses['total_loss'] += wandb_losses['repa_loss']
+                        if 'hidden_loss' in loss_dict:
+                            wandb_losses['hidden_loss'] = loss_dict["hidden_loss"].mean().item()
+                            wandb_losses['total_loss'] += wandb_losses['hidden_loss']
+                        # print(wandb_losses)
+                        wandb.log(wandb_losses, step=train_steps)
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
@@ -430,12 +446,12 @@ if __name__ == "__main__":
 
     accelerator = Accelerator()
     train_config = load_config(args.config)
-    if accelerator.is_main_process and enable_swandb:
-        # Initialize SwanLab
-        swanlab.init(
+    if accelerator.is_main_process and enable_wandb:
+        # Initialize wandb
+        wandb.init(
             # Set project name
             project=f"LightningDiT",
-            experiment_name=train_config['train']['exp_name'],
+            name=train_config['train']['exp_name'],
 
             # Set hyperparameters
             config=train_config

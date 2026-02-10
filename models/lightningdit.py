@@ -63,10 +63,17 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 @torch.compile
-def modulate(x, shift, scale):
+def modulate_unsqueeze(x, shift, scale):
     if shift is None:
         return x * (1 + scale.unsqueeze(1))
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+
+@torch.compile
+def modulate(x, shift, scale):
+    if shift is None:
+        return x * (1 + scale)
+    return x * (1 + scale) + shift
 
 class Attention(nn.Module):
     """
@@ -278,14 +285,17 @@ class LightningDiTBlock(nn.Module):
     @torch.compile
     def forward(self, x, c, feat_rope=None):
         if self.wo_shift:
-            scale_msa, gate_msa, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(4, dim=1)
+            scale_msa, gate_msa, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(4, dim=-1)
             shift_msa = None
             shift_mlp = None
         else:
-            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
             
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), rope=feat_rope)
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        if gate_msa.dim() == 2:
+            gate_msa = gate_msa.unsqueeze(1)
+            gate_mlp = gate_mlp.unsqueeze(1)
+        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), rope=feat_rope)
+        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 class FinalLayer(nn.Module):
@@ -305,7 +315,7 @@ class FinalLayer(nn.Module):
         )
     @torch.compile
     def forward(self, x, c):
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
         return x
@@ -518,6 +528,8 @@ class LightningDiT(nn.Module):
             t = self.t_embedder(t)  # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t + y                                # (N, D)
+        
+        c = c.unsqueeze(1)                       # (N, 1, D) expand for addition, will be broadcasted in blocks
 
         # for block in self.blocks:
         for idx, block in enumerate(self.blocks):

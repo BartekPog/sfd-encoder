@@ -510,9 +510,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", type=str, default='outputs/dataset/imagenet1k-folder/train')
+    parser.add_argument("--data_path", type=str, default='/scratch/inf0/user/mparcham/ILSVRC2012/train')
     parser.add_argument("--data_split", type=str, default='imagenet_train')
-    parser.add_argument("--output_path", type=str, default="outputs/dataset/imagenet1k-latents")
+    parser.add_argument("--output_path", type=str, default="/scratch/inf0/user/bpogodzi/datasets/imagenet-sfd-latents/train")
     parser.add_argument("--config", type=str, default="config_details.yaml")
     parser.add_argument("--image_size", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=20)

@@ -26,11 +26,11 @@ from diffusers import AutoencoderKL
 from tokenizer.semvae.models.vae import create_semantic_autoencoder
 from tokenizer.semvae.data.preextracted import build_preextracted_dataloader, build_eval_dataloader
 
-enable_swandb = False
-if enable_swandb:
-    # pip install swanlab
-    import swanlab
-    swanlab.login(api_key="YOUR_SWANLAB_KEY", save=True)
+enable_wandb = False
+if enable_wandb:
+    # pip install wandb
+    import wandb
+    wandb.login()
 
 
 def evaluate_on_preextracted(semantic_ae, eval_dataloader, variational, device, classification_head=None):
@@ -143,9 +143,9 @@ def eval_model(eval_dataloader, semantic_ae, variational, iteration, log_dir, cl
                        f"KL Loss: {avg_kl_loss:.6f}, "
                        f"Classification Loss: {avg_classification_loss:.6f}\n")
 
-        # SwanDB log evaluation metrics
-        if enable_swandb:
-            swanlab.log({
+        # wandb log evaluation metrics
+        if enable_wandb:
+            wandb.log({
                 "eval_mse": avg_mse,
                 "eval_l1": avg_l1,
                 "eval_cosine_sim": avg_cosine_sim,
@@ -434,12 +434,12 @@ def main():
     constant_steps = scheduler_config['constant_steps']
     scheduler = setup_scheduler(optimizer, base_lr, warmup_steps, constant_steps, total_iterations)
 
-    # Initialize SwanLab
-    if enable_swandb:
-        swanlab.init(
+    # Initialize wandb
+    if enable_wandb:
+        wandb.init(
             # Set project name
             project=f"SemanticVAE-{model_name}",
-            experiment_name=config['training']['log']['swandb_exp_name'],
+            name=config['training']['log']['wandb_exp_name'],
 
             # Set hyperparameters
             config={
@@ -611,9 +611,9 @@ def main():
                 
                 last_iter_time = current_time
 
-                # SwanLab log losses
-                if enable_swandb:
-                    swanlab.log(current_losses, step=iteration)
+                # wandb log losses
+                if enable_wandb:
+                    wandb.log(current_losses, step=iteration)
 
             # Evaluation
             if iteration % eval_every == 0 and iteration > 0:

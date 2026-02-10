@@ -307,6 +307,165 @@ class Transport:
                 terms['loss'] = mean_flat(weight * ((model_output * sigma_t + x0) ** 2))
                 
         return terms
+
+    def training_losses_hidden(
+        self,
+        model,
+        x1,
+        model_kwargs=None,
+        sp_timesteps=None,
+        shifted_mu=0,
+        use_repa=False,
+        feature_dino=None,
+        hidden_weight=1.0,
+    ):
+        """
+        Self-encoder training loss with hidden tokens.
+
+        Three forward passes:
+          Pass 1: Clean image + pure noise hidden -> predict encoding (single-step)
+          Pass 2: Noisy image + noisy encoding (grad flows through encoding) -> image denoising loss
+          Pass 3: Noisy image + noisy DETACHED encoding -> hidden denoising loss
+
+        Args:
+            model: HiddenLightningDiT model (possibly wrapped in DDP)
+            x1: clean data (B, C, H, W)
+            model_kwargs: dict with 'y' (class labels)
+            hidden_weight: weight for hidden denoising loss (pass 3)
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+
+        # Get model's hidden token config (works with DDP .module)
+        m = model.module if hasattr(model, 'module') else model
+        num_hidden_tokens = m.num_hidden_tokens
+        hidden_token_dim = m.hidden_token_dim
+        B = x1.shape[0]
+        device = x1.device
+
+        # ============ PASS 1: Encode ============
+        # Convention: x_t = t * x1 + (1-t) * x0, where x0=noise, x1=clean data
+        #   t=0 → pure noise, t=1 → clean data
+        # We pass the clean image (t_img=1) with pure noise hidden tokens (t_hid=0).
+        # The model predicts velocity v = x1 - x0 for hidden, so:
+        #   h_clean = x0_h + v_h  (recover clean encoding from noise + predicted velocity)
+        x0_h = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+        t_encode_img = th.ones(B, device=device)    # t=1: image is clean data
+        t_encode_hid = th.zeros(B, device=device)   # t=0: hidden is pure noise
+
+        # Forward pass 1: model sees clean image (t=1) + pure noise hidden (t=0)
+        # Model predicts velocity for hidden: v_h = x1_h - x0_h
+        # Recover clean encoding: h_clean = x0_h + v_h
+        if self.semfirst_delta_t > 0:
+            t_encode_img_for_model = (t_encode_img, t_encode_img)  # both tex and sem at t=1
+        else:
+            t_encode_img_for_model = t_encode_img
+
+        _, h_velocity = model(x1, t=t_encode_img_for_model, x_hidden=x0_h,
+                              t_hidden=t_encode_hid, **model_kwargs)
+        # Reconstruct clean encoding from velocity prediction
+        h_clean = x0_h + h_velocity  # x1 = x0 + v
+
+        # ============ PASS 2: Image denoising conditioned on encoding ============
+        # Sample timesteps and noise for image
+        t_img, x0_img, x1_img = self.sample(x1, sp_timesteps, shifted_mu)
+
+        # Handle semantic first for image timesteps
+        if self.semfirst_delta_t > 0:
+            t_sem = t_img * (1 + self.semfirst_delta_t)
+            t_tex = t_sem - self.semfirst_delta_t
+            t_sem = t_sem.clamp(max=1.0)
+            t_tex = t_tex.clamp(min=0.0)
+            x0_sem = x0_img[:, -self.semantic_chans:]
+            x0_tex = x0_img[:, :-self.semantic_chans]
+            x1_sem = x1_img[:, -self.semantic_chans:]
+            x1_tex = x1_img[:, :-self.semantic_chans]
+            t_sem, xt_sem, ut_sem = self.path_sampler.plan(t_sem, x0_sem, x1_sem)
+            t_tex, xt_tex, ut_tex = self.path_sampler.plan(t_tex, x0_tex, x1_tex)
+            t_img_for_model = (t_tex, t_sem)
+            xt_img = th.cat([xt_tex, xt_sem], dim=1)
+            ut_img = th.cat([ut_tex, ut_sem], dim=1)
+        else:
+            t_img, xt_img, ut_img = self.path_sampler.plan(t_img, x0_img, x1_img)
+            t_img_for_model = t_img
+
+        # Sample timestep and noise for hidden tokens
+        t0_h, t1_h = self.check_interval(self.train_eps, self.sample_eps)
+        t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+        x0_h2 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+
+        # Noise the encoding (gradient flows through h_clean from Pass 1!)
+        t_h_expanded = t_h.view(B, 1, 1)
+        xt_h = t_h_expanded * h_clean + (1 - t_h_expanded) * x0_h2  # linear interpolation
+        ut_h = h_clean - x0_h2  # velocity target for linear path
+
+        # Forward pass 2: predict image and hidden velocities
+        if use_repa:
+            assert feature_dino is not None
+            img_pred, h_pred, repa_feat_proj = model(xt_img, t=t_img_for_model, x_hidden=xt_h,
+                                                     t_hidden=t_h, **model_kwargs)
+        else:
+            img_pred, h_pred = model(xt_img, t=t_img_for_model, x_hidden=xt_h,
+                                     t_hidden=t_h, **model_kwargs)
+
+        # Image denoising loss (velocity matching)
+        loss_per_channel = (img_pred - ut_img) ** 2
+        if self.semantic_chans > 0 and self.semantic_weight != 1.0:
+            ch_num = ut_img.shape[1]
+            regular_chans = ch_num - self.semantic_chans
+            regular_loss = loss_per_channel[:, :regular_chans]
+            semantic_loss = loss_per_channel[:, regular_chans:] * self.semantic_weight
+            total_img_loss = th.cat([regular_loss, semantic_loss], dim=1)
+            img_loss = mean_flat(total_img_loss)
+        else:
+            img_loss = mean_flat(loss_per_channel)
+
+        terms = {}
+        terms['loss'] = img_loss  # image denoising loss (gradient flows through h_clean -> Pass 1)
+        terms['pred'] = img_pred
+
+        if self.use_cosine_loss:
+            terms['cos_loss'] = mean_flat(1 - th.nn.functional.cosine_similarity(img_pred, ut_img, dim=1))
+
+        if use_repa:
+            feature_dino = einops.rearrange(feature_dino, 'b c h w -> b (h w) c')
+            if self.repa_mode == 'cos':
+                repa_loss = mean_flat((1 - th.nn.functional.cosine_similarity(feature_dino, repa_feat_proj, dim=-1)))
+            elif self.repa_mode == 'mse':
+                repa_loss = mean_flat((feature_dino - repa_feat_proj) ** 2)
+            elif self.repa_mode == 'cos_mse':
+                cos_loss = mean_flat(1 - th.nn.functional.cosine_similarity(feature_dino, repa_feat_proj, dim=-1))
+                mse_loss = mean_flat((feature_dino - repa_feat_proj) ** 2)
+                repa_loss = (cos_loss + mse_loss) / 2
+            terms['repa_loss'] = repa_loss * self.repa_weight
+
+        # ============ PASS 3: Hidden denoising (detached encoding) ============
+        h_clean_detached = h_clean.detach()
+
+        # Sample new timestep for hidden
+        t_h3 = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+        x0_h3 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+
+        t_h3_expanded = t_h3.view(B, 1, 1)
+        xt_h3 = t_h3_expanded * h_clean_detached + (1 - t_h3_expanded) * x0_h3
+        ut_h3 = h_clean_detached - x0_h3
+
+        # Forward pass 3: reuse the same noisy image from pass 2 (detached from img path)
+        xt_img_detached = xt_img.detach()
+        # Detach t_img_for_model if it's a tuple
+        if isinstance(t_img_for_model, tuple):
+            t_img_detached = tuple(t.detach() for t in t_img_for_model)
+        else:
+            t_img_detached = t_img_for_model.detach()
+
+        _, h_pred3 = model(xt_img_detached, t=t_img_detached, x_hidden=xt_h3,
+                           t_hidden=t_h3, **model_kwargs)
+
+        # Hidden denoising loss
+        hidden_loss = mean_flat((h_pred3 - ut_h3) ** 2)
+        terms['hidden_loss'] = hidden_loss * hidden_weight
+
+        return terms
     
 
     def get_drift(
@@ -578,6 +737,103 @@ class Sampler:
         )
         
         return _ode.sample
+
+    def sample_ode_hidden(
+        self,
+        *,
+        sampling_method="dopri5",
+        num_steps=50,
+        atol=1e-6,
+        rtol=1e-3,
+        reverse=False,
+        timestep_shift=0.0,
+        num_hidden_tokens=8,
+        hidden_token_dim=32,
+    ):
+        """
+        Returns a sampling function that jointly generates image and hidden tokens via ODE.
+        Uses tuple state (x_img, x_hidden) compatible with torchdiffeq.
+
+        Args:
+        - sampling_method: type of sampler used in solving the ODE; default to be Dopri5
+        - num_steps: number of integration steps
+        - atol: absolute error tolerance
+        - rtol: relative error tolerance
+        - reverse: whether to reverse time
+        - timestep_shift: timestep shift parameter
+        - num_hidden_tokens: number of hidden tokens per sample
+        - hidden_token_dim: dimension of each hidden token
+        """
+
+        def joint_drift(state, t, model, **model_kwargs):
+            """
+            Joint drift for image + hidden tokens.
+            state: tuple (x_img, x_hidden)
+              x_img: (B, C, H, W)
+              x_hidden: (B, num_hidden_tokens, hidden_token_dim)
+            t: (B,) scalar timestep (same for image and hidden)
+            Returns: tuple (img_velocity, hidden_velocity)
+            """
+            x_img, x_hidden = state
+
+            # Model returns (img_velocity, hidden_velocity) — works with
+            # forward, forward_with_cfg, and forward_with_autoguidance
+            # because they all accept x_hidden/t_hidden as kwargs
+            result = model(x_img, t=t, x_hidden=x_hidden, t_hidden=t,
+                           **model_kwargs)
+            if isinstance(result, tuple):
+                img_vel, hidden_vel = result[0], result[1]
+            else:
+                raise ValueError("Model must return (img_output, hidden_output) tuple for hidden token sampling")
+
+            return (img_vel, hidden_vel)
+
+        if reverse:
+            drift = lambda state, t, model, **kwargs: joint_drift(
+                state, th.ones_like(t) * (1 - t), model, **kwargs
+            )
+        else:
+            drift = joint_drift
+
+        t0, t1 = self.transport.check_interval(
+            self.transport.train_eps,
+            self.transport.sample_eps,
+            sde=False,
+            eval=True,
+            reverse=reverse,
+            last_step_size=0.0,
+        )
+
+        _ode = ode(
+            drift=drift,
+            t0=t0,
+            t1=t1,
+            sampler_type=sampling_method,
+            num_steps=num_steps,
+            atol=atol,
+            rtol=rtol,
+            timestep_shift=timestep_shift,
+        )
+
+        def _sample_fn(z_img, z_hidden, model, **model_kwargs):
+            """
+            Sample image + hidden tokens jointly via ODE.
+            Args:
+                z_img: (B, C, H, W) initial noise for image
+                z_hidden: (B, num_hidden_tokens, hidden_token_dim) initial noise for hidden tokens
+                model: model forward function
+            Returns:
+                (img_samples, hidden_samples) tuple at t=1
+            """
+            init_state = (z_img, z_hidden)
+            samples = _ode.sample(init_state, model, **model_kwargs)
+            # odeint returns samples at each timepoint; last one is at t=1
+            if isinstance(samples, tuple):
+                return samples[0][-1], samples[1][-1]
+            else:
+                return samples[-1]
+
+        return _sample_fn
 
     def sample_ode_semantic_first(
         self,
