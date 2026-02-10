@@ -248,10 +248,14 @@ def do_train(train_config, accelerator):
             use_hidden = train_config['model'].get('use_hidden_tokens', False)
             if use_hidden:
                 hidden_weight = train_config['model'].get('hidden_weight', 1.0)
+                normalize_hidden = train_config['model'].get('normalize_hidden', True)
+                hidden_reg_weight = train_config['model'].get('hidden_reg_weight', 0.01)
                 loss_dict = transport.training_losses_hidden(
                     model, x, model_kwargs,
                     use_repa=use_repa, feature_dino=feature_dino,
                     hidden_weight=hidden_weight,
+                    normalize_hidden=normalize_hidden,
+                    hidden_reg_weight=hidden_reg_weight,
                 )
             else:
                 loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
@@ -274,6 +278,8 @@ def do_train(train_config, accelerator):
             if 'hidden_loss' in loss_dict:
                 hidden_loss = loss_dict["hidden_loss"].mean()
                 loss = loss + hidden_loss
+            if 'hidden_reg_loss' in loss_dict:
+                loss = loss + loss_dict["hidden_reg_loss"]
             opt.zero_grad()
             accelerator.backward(loss)
             if 'max_grad_norm' in train_config['optimizer']:
@@ -321,6 +327,9 @@ def do_train(train_config, accelerator):
                         if 'hidden_loss' in loss_dict:
                             wandb_losses['hidden_loss'] = loss_dict["hidden_loss"].mean().item()
                             wandb_losses['total_loss'] += wandb_losses['hidden_loss']
+                        if 'hidden_reg_loss' in loss_dict:
+                            wandb_losses['hidden_reg_loss'] = loss_dict["hidden_reg_loss"].item()
+                            wandb_losses['total_loss'] += wandb_losses['hidden_reg_loss']
                         # print(wandb_losses)
                         wandb.log(wandb_losses, step=train_steps)
                 # Reset monitoring variables:

@@ -318,6 +318,8 @@ class Transport:
         use_repa=False,
         feature_dino=None,
         hidden_weight=1.0,
+        normalize_hidden=True,
+        hidden_reg_weight=0.01,
     ):
         """
         Self-encoder training loss with hidden tokens.
@@ -332,6 +334,10 @@ class Transport:
             x1: clean data (B, C, H, W)
             model_kwargs: dict with 'y' (class labels)
             hidden_weight: weight for hidden denoising loss (pass 3)
+            normalize_hidden: if True, project h_clean tokens onto unit sphere to
+                prevent variance explosion (default True)
+            hidden_reg_weight: weight for regularization loss that penalizes hidden
+                token norms deviating from 1. Set to 0 to disable. (default 0.01)
         """
         if model_kwargs is None:
             model_kwargs = {}
@@ -365,6 +371,15 @@ class Transport:
                               t_hidden=t_encode_hid, **model_kwargs)
         # Reconstruct clean encoding from velocity prediction
         h_clean = x0_h + h_velocity  # x1 = x0 + v
+
+        # Regularization: penalize hidden token norms deviating from unit sphere
+        if hidden_reg_weight > 0:
+            h_radius = h_clean.norm(dim=-1)  # (B, num_hidden_tokens)
+            hidden_reg_loss = (h_radius - 1).pow(2).mean()
+        
+        # Project each hidden token onto the unit sphere to prevent variance explosion
+        if normalize_hidden:
+            h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
 
         # ============ PASS 2: Image denoising conditioned on encoding ============
         # Sample timesteps and noise for image
@@ -438,6 +453,10 @@ class Transport:
                 mse_loss = mean_flat((feature_dino - repa_feat_proj) ** 2)
                 repa_loss = (cos_loss + mse_loss) / 2
             terms['repa_loss'] = repa_loss * self.repa_weight
+
+        # Hidden token regularization loss
+        if hidden_reg_weight > 0:
+            terms['hidden_reg_loss'] = hidden_reg_loss * hidden_reg_weight
 
         # ============ PASS 3: Hidden denoising (detached encoding) ============
         h_clean_detached = h_clean.detach()

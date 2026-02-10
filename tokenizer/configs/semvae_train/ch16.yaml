@@ -74,5 +74,5 @@ training:
   log:
     log_dir: "${variables.output_root}"
     log_every: 100
-    swandb_exp_name: "arch_transformer_ch${variables.bottleneck_dim}"
+    wandb_exp_name: "arch_transformer_ch${variables.bottleneck_dim}"
 
