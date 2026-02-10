@@ -1,4 +1,6 @@
 #!/bin/bash
+
+source .venv-sfd/bin/activate
 CONFIG_PATH=$1
 SEMANTIC_FEAT_TYPE=${2:-''}
 REPA_DINO_MODEL_NAME=${3:-''}

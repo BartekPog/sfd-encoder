@@ -38,7 +38,7 @@ train:
   max_steps: 4000000
   global_batch_size: 256
   global_seed: 0
-  output_dir: 'outputs/train'
+  output_dir: '/scratch/inf0/user/bpogodzi/sfd/outs'
   exp_name: 'sfd_1p0' # <---- experiment name, set as you like
   ckpt: null
   log_every: 100
@@ -74,4 +74,4 @@ sample:
   balanced_sampling: true
 
   autoguidance: true
-  autoguidance_config: 'configs/sfd/autoguidance_b/inference.yaml'
+  autoguidance_config: configs/sfd/lightningdit_1p0/inference_400k.yaml #'configs/sfd/autoguidance_b/inference.yaml'

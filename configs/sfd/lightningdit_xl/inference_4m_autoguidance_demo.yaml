@@ -1,4 +1,4 @@
-ckpt_path: 'outputs/train/sfd_xl/checkpoints/0400000.pt' # not used for train
+ckpt_path: 'outputs/train/sfd_xl/checkpoints/4000000.pt' # not used for train
 
 data:
   data_path: 'outputs/dataset/imagenet1k-latents/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
@@ -38,7 +38,7 @@ train:
   max_steps: 4000000
   global_batch_size: 256
   global_seed: 0
-  output_dir: '/scratch/inf0/user/bpogodzi/sfd/inference-outs' #'outputs/train'
+  output_dir: 'outputs/train'
   exp_name: 'sfd_xl' # <---- experiment name, set as you like
   ckpt: null
   log_every: 100
