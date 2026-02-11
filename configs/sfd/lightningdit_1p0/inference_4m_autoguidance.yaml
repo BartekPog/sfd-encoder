@@ -66,7 +66,7 @@ sample:
   reverse: false
   likelihood: false
   num_sampling_steps: 250 # not work if use dopri5 sampler
-  cfg_scale: 1.0 
+  cfg_scale: 1.5    # Best FID=1.04 uses 1.5 (README table)
   per_proc_batch_size: 4
   fid_num: 50000
   cfg_interval_start: 0
@@ -74,4 +74,7 @@ sample:
   balanced_sampling: true
 
   autoguidance: true
-  autoguidance_config: configs/sfd/lightningdit_1p0/inference_400k.yaml #'configs/sfd/autoguidance_b/inference.yaml'
+  autoguidance_config: 'configs/sfd/autoguidance_b/inference.yaml'  # LightningDiT-B degraded model
+  # NOTE: For FID=1.04 use AUTOGUIDANCE_CKPT_ITER=120 at runtime
+  #       (default autoguidance_b/inference.yaml loads 70K ckpt;
+  #        the paper's best XXL/800ep result uses the 120K ckpt)

@@ -197,14 +197,27 @@ def do_train(train_config, accelerator):
     if train_config['train']['resume']:
         # check if the checkpoint exists
         checkpoint_files = glob(f"{checkpoint_dir}/*.pt")
-        if checkpoint_files:
-            checkpoint_files.sort(key=lambda x: os.path.getsize(x))
-            latest_checkpoint = checkpoint_files[-1]
+        last_checkpoint = os.path.join(checkpoint_dir, "last.pt")
+        latest_checkpoint = None
+        if os.path.exists(last_checkpoint):
+            latest_checkpoint = last_checkpoint
+        else:
+            numeric_checkpoints = [
+                path for path in checkpoint_files
+                if os.path.basename(path).split('.')[0].isdigit()
+            ]
+            if numeric_checkpoints:
+                numeric_checkpoints.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
+                latest_checkpoint = numeric_checkpoints[-1]
+        if latest_checkpoint is not None:
             checkpoint = torch.load(latest_checkpoint, map_location=lambda storage, loc: storage)
             model.load_state_dict(checkpoint['model'])
             # opt.load_state_dict(checkpoint['opt'])
             ema.load_state_dict(checkpoint['ema'])
-            train_steps = int(latest_checkpoint.split('/')[-1].split('.')[0])
+            train_steps = checkpoint.get('train_steps')
+            if train_steps is None:
+                base = os.path.basename(latest_checkpoint).split('.')[0]
+                train_steps = int(base) if base.isdigit() else 0
             if accelerator.is_main_process:
                 logger.info(f"Resuming training from checkpoint: {latest_checkpoint}")
         else:
@@ -230,6 +243,9 @@ def do_train(train_config, accelerator):
     running_loss = 0
     start_time = time()
     use_checkpoint = train_config['train']['use_checkpoint'] if 'use_checkpoint' in train_config['train'] else True
+    ckpt_every = train_config['train'].get('ckpt_every', 0)
+    ckpt_last_every = train_config['train'].get('ckpt_last_every', ckpt_every)
+    ckpt_keep_every = train_config['train'].get('ckpt_keep_every', ckpt_every)
     if accelerator.is_main_process:
         logger.info(f"Using checkpointing: {use_checkpoint}")
 
@@ -359,31 +375,38 @@ def do_train(train_config, accelerator):
                     start_time = time()
 
                 # Save checkpoint:
-                if train_steps % train_config['train']['ckpt_every'] == 0 and train_steps > 0:
+                save_last = ckpt_last_every and train_steps % ckpt_last_every == 0 and train_steps > 0
+                save_keep = ckpt_keep_every and train_steps % ckpt_keep_every == 0 and train_steps > 0
+                if save_last or save_keep:
                     if accelerator.is_main_process:
                         checkpoint = {
                             "model": model.module.state_dict(),
                             "ema": ema.state_dict(),
                             "opt": opt.state_dict(),
                             "config": train_config,
+                            "train_steps": train_steps,
                         }
-                        checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                        torch.save(checkpoint, checkpoint_path)
-                        if accelerator.is_main_process:
+                        if save_last:
+                            last_path = f"{checkpoint_dir}/last.pt"
+                            torch.save(checkpoint, last_path)
+                            logger.info(f"Saved checkpoint to {last_path}")
+                        if save_keep:
+                            checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
+                            torch.save(checkpoint, checkpoint_path)
                             logger.info(f"Saved checkpoint to {checkpoint_path}")
                     dist.barrier()
 
-                    # Evaluate on validation set
-                    if 'valid_path' in train_config['data']:
-                        if accelerator.is_main_process:
-                            logger.info(f"Start evaluating at step {train_steps}")
-                        val_loss = evaluate(model, valid_loader, device, transport, (0.0, 1.0))
-                        dist.all_reduce(val_loss, op=dist.ReduceOp.SUM)
-                        val_loss = val_loss.item() / dist.get_world_size()
-                        if accelerator.is_main_process:
-                            logger.info(f"Validation Loss: {val_loss:.4f}")
-                            writer.add_scalar('Loss/validation', val_loss, train_steps)
-                        model.train()
+                # Evaluate on validation set
+                if save_keep and 'valid_path' in train_config['data']:
+                    if accelerator.is_main_process:
+                        logger.info(f"Start evaluating at step {train_steps}")
+                    val_loss = evaluate(model, valid_loader, device, transport, (0.0, 1.0))
+                    dist.all_reduce(val_loss, op=dist.ReduceOp.SUM)
+                    val_loss = val_loss.item() / dist.get_world_size()
+                    if accelerator.is_main_process:
+                        logger.info(f"Validation Loss: {val_loss:.4f}")
+                        writer.add_scalar('Loss/validation', val_loss, train_steps)
+                    model.train()
                 if train_steps >= train_config['train']['max_steps']:
                     break
         if train_steps >= train_config['train']['max_steps']:

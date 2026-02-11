@@ -49,8 +49,10 @@ train:
   output_dir: 'outputs/train'
   exp_name: 'hidden_xl_from_pretrained'
   ckpt: null
-  log_every: 100
+  log_every: 10
   ckpt_every: 40000
+  ckpt_last_every: 1000
+  ckpt_keep_every: 20000
   resume: true
   # Initialize from LightningDiT-XL 400K checkpoint
   # Shared weights (blocks, embedders, final_layer, etc.) are loaded;

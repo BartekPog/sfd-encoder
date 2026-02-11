@@ -43,8 +43,10 @@ train:
   output_dir: 'outputs/train'
   exp_name: 'sfd_xl_finetune'
   ckpt: null
-  log_every: 100
-  ckpt_every: 40000
+  log_every: 10
+  ckpt_every: 10000
+  ckpt_last_every: 1000
+  ckpt_keep_every: 20000
   resume: true
   weight_init: 'outputs/train/sfd_xl/checkpoints/0400000.pt'
 

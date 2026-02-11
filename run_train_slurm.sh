@@ -20,12 +20,13 @@ NUM_CHAINS=${2:-6}
 
 # ---- SLURM settings (3x L40 on gpu17) ----
 PARTITION="gpu17"
-TIME="00-04:00:00"        # 4 hours per chain link
+TIME=${TIME:-"00-06:00:00"}        # 6 hours per chain link
 NUM_GPUS=3
 GPUS="l40:${NUM_GPUS}"
 MEM="350G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
+DEPENDENCY_TYPE=${DEPENDENCY_TYPE:-afterany}
 
 # ---- Derive a short experiment name for job naming ----
 # e.g. configs/sfd/hidden_xl/exp1_hidden_scratch.yaml → exp1_hidden_scratch
@@ -83,7 +84,7 @@ SLURM_EOF
     if [ -z "${PREV_JOB_ID}" ]; then
         JOB_ID=$(sbatch --parsable "${JOBSCRIPT}")
     else
-        JOB_ID=$(sbatch --parsable --dependency=afterok:"${PREV_JOB_ID}" "${JOBSCRIPT}")
+        JOB_ID=$(sbatch --parsable --dependency=${DEPENDENCY_TYPE}:"${PREV_JOB_ID}" "${JOBSCRIPT}")
     fi
 
     echo "  Chain ${i}/${NUM_CHAINS}: submitted job ${JOB_ID}"

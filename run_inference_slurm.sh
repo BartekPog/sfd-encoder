@@ -63,7 +63,7 @@ echo "source ~/.bashrc" >> $jobscript
 # echo "module load ffmpeg cuda/13.0" >> $jobscript
 echo "source ./.venv-sfd/bin/activate" >> $jobscript
 # echo "source ./.venv/bin/activate" >> $jobscript
-echo "DEBUG=False TORCH_HOME=/scratch/inf0/user/bpogodzi/torch-cache HF_HOME=/BS/var-training/work/mdlm-decoding/tmp GPUS_PER_NODE=$NUM_GPUS FID_NUM=50000 bash run_inference.sh configs/sfd/lightningdit_1p0/inference_4m_autoguidance.yaml --calculate-fid" >> $jobscript
+echo "DEBUG=False TORCH_HOME=/scratch/inf0/user/bpogodzi/torch-cache HF_HOME=/BS/var-training/work/mdlm-decoding/tmp GPUS_PER_NODE=$NUM_GPUS PRECISION=bf16 FID_NUM=50000 AUTOGUIDANCE_CKPT_ITER=120 bash run_inference.sh configs/sfd/lightningdit_1p0/inference_4m_autoguidance.yaml --calculate-fid" >> $jobscript
 
 
 echo $jobscript
