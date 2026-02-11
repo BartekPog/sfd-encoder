@@ -24,11 +24,12 @@ from transport import create_transport, Sampler
 from dataset.img_latent_dataset import ImgLatentDataset
 from omegaconf import OmegaConf
 
-enable_wandb = False
+# Enable W&B via env var for Slurm/non-interactive runs.
+# Example: `export ENABLE_WANDB=1` (and optionally set `WANDB_PROJECT`, `WANDB_RUN_NAME`).
+enable_wandb = os.getenv("ENABLE_WANDB", "0") == "1"
 if enable_wandb:
     # pip install wandb
     import wandb
-    wandb.login()
 
 def drop_semantic_chansels(config, latent):
     if config['model'].get('semantic_chans', 0) > 0:
@@ -326,21 +327,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             print_with_prefix(f'Semantic First enabled: {expected_texture_chans} texture + {semantic_chans} semantic = {model_in_channels} total channels')
 
     if mode == "ODE":
-        if use_hidden:
-            # Joint ODE sampling for image + hidden tokens
-            sample_fn = sampler.sample_ode_hidden(
-                sampling_method=train_config['sample']['sampling_method'],
-                num_steps=train_config['sample']['num_sampling_steps'],
-                atol=train_config['sample']['atol'],
-                rtol=train_config['sample']['rtol'],
-                reverse=train_config['sample']['reverse'],
-                timestep_shift=timestep_shift,
-                num_hidden_tokens=model.num_hidden_tokens,
-                hidden_token_dim=model.hidden_token_dim,
-            )
-            if accelerator.process_index == 0:
-                print_with_prefix(f'Using Hidden Token ODE sampling with {model.num_hidden_tokens} tokens')
-        elif use_semantic_first:
+        if use_semantic_first:
             # Use semantic first ODE sampling
             sample_fn = sampler.sample_ode_semantic_first(
                 sampling_method=train_config['sample']['sampling_method'],
@@ -470,32 +457,21 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 z = torch.randn(1, model.in_channels, latent_size, latent_size, device=device)
                 y = torch.tensor([label], device=device)
 
-                if use_hidden:
-                    z_hidden = torch.randn(1, model.num_hidden_tokens, model.hidden_token_dim, device=device)
-
                 if autoguidance_model is not None:
                     # AutoGuidance mode: use small model for unconditional
-                    ag_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=False, cfg_interval_start=cfg_interval_start,
-                                     autoguidance_model=autoguidance_model,
-                                     cfg_scale_sem=effective_cfg_sem, cfg_scale_tex=effective_cfg_tex)
+                    model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=False, cfg_interval_start=cfg_interval_start,
+                                      autoguidance_model=autoguidance_model,
+                                      cfg_scale_sem=effective_cfg_sem, cfg_scale_tex=effective_cfg_tex)
                     model_fn = model.forward_with_autoguidance
                 else:
                     # Standard CFG mode
                     z = torch.cat([z, z], 0)
                     y_null = torch.tensor([1000] * 1, device=device)
                     y = torch.cat([y, y_null], 0)
-                    ag_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=False, cfg_interval_start=cfg_interval_start)
+                    model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=False, cfg_interval_start=cfg_interval_start)
                     model_fn = model.forward_with_cfg
 
-                if use_hidden:
-                    samples = sample_fn((z, z_hidden), model_fn, **ag_kwargs)
-                    # samples is a tuple of (img_trajectory, hidden_trajectory)
-                    samples = samples[0][-1]  # img part of last timestep
-                    if autoguidance_model is None:
-                        samples, _ = samples.chunk(2, dim=0)
-                else:
-                    samples = sample_fn(z, model_fn, **ag_kwargs)[-1]
-
+                samples = sample_fn(z, model_fn, **model_kwargs)[-1]
                 samples = drop_semantic_chansels(train_config, samples)
                 samples = (samples * latent_std) / latent_multiplier + latent_mean
                 samples = vae.decode_to_images(samples)
@@ -520,9 +496,6 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         for iter_idx in pbar:
             # Sample inputs:
             z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
-
-            if use_hidden:
-                z_hidden = torch.randn(n, model.num_hidden_tokens, model.hidden_token_dim, device=device)
 
             # Get labels (fixed, balanced, or random)
             if fixed_class_label is not None:
@@ -557,8 +530,6 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 else:
                     # Standard CFG mode
                     z = torch.cat([z, z], 0)
-                    if use_hidden:
-                        z_hidden = torch.cat([z_hidden, z_hidden], 0)
                     y_null = torch.tensor([1000] * n, device=device)
                     y = torch.cat([y, y_null], 0)
                     model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=True, cfg_interval_start=cfg_interval_start)
@@ -567,16 +538,9 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 model_kwargs = dict(y=y)
                 model_fn = model.forward
 
-            if use_hidden:
-                results = sample_fn((z, z_hidden), model_fn, **model_kwargs)
-                # results is a tuple of (img_trajectory, hidden_trajectory)
-                samples = results[0][-1]  # img part of last timestep
-                if using_cfg and autoguidance_model is None:
-                    samples, _ = samples.chunk(2, dim=0)
-            else:
-                samples = sample_fn(z, model_fn, **model_kwargs)[-1]
-                if using_cfg and autoguidance_model is None:
-                    samples, _ = samples.chunk(2, dim=0)  # Remove null class samples (only for standard CFG)
+            samples = sample_fn(z, model_fn, **model_kwargs)[-1]
+            if using_cfg and autoguidance_model is None:
+                samples, _ = samples.chunk(2, dim=0)  # Remove null class samples (only for standard CFG)
             samples = drop_semantic_chansels(train_config, samples)
             samples = (samples * latent_std) / latent_multiplier + latent_mean
             samples = vae.decode_to_images(samples)
@@ -629,10 +593,14 @@ if __name__ == "__main__":
 
     # Initialize wandb
     if accelerator.is_main_process and enable_wandb:
+        wandb_project = os.getenv("WANDB_PROJECT", "SF")
+        wandb_run_name = os.getenv("WANDB_RUN_NAME", train_config['train']['exp_name'])
+        wandb_entity = os.getenv("WANDB_ENTITY", None)
         wandb.init(
-            project="SF",
-            name=train_config['train']['exp_name'],
-            config=train_config
+            project=wandb_project,
+            entity=wandb_entity,
+            name=wandb_run_name,
+            config=train_config,
         )
 
     # get ckpt_dir

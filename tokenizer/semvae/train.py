@@ -26,11 +26,10 @@ from diffusers import AutoencoderKL
 from tokenizer.semvae.models.vae import create_semantic_autoencoder
 from tokenizer.semvae.data.preextracted import build_preextracted_dataloader, build_eval_dataloader
 
-enable_wandb = False
+enable_wandb = os.getenv("ENABLE_WANDB", "0") == "1"
 if enable_wandb:
     # pip install wandb
     import wandb
-    wandb.login()
 
 
 def evaluate_on_preextracted(semantic_ae, eval_dataloader, variational, device, classification_head=None):
@@ -436,10 +435,14 @@ def main():
 
     # Initialize wandb
     if enable_wandb:
+        wandb_project = os.getenv("WANDB_PROJECT", f"SemanticVAE-{model_name}")
+        wandb_run_name = os.getenv("WANDB_RUN_NAME", config['training']['log']['wandb_exp_name'])
+        wandb_entity = os.getenv("WANDB_ENTITY", None)
         wandb.init(
             # Set project name
-            project=f"SemanticVAE-{model_name}",
-            name=config['training']['log']['wandb_exp_name'],
+            project=wandb_project,
+            entity=wandb_entity,
+            name=wandb_run_name,
 
             # Set hyperparameters
             config={

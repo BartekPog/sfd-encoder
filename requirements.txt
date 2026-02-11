@@ -10,6 +10,7 @@ accelerate
 torchdiffeq
 pytorch_fid
 tensorboard==2.8.0
+wandb
 omegaconf==2.3.0
 einops
 fairscale

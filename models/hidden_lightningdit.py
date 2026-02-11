@@ -12,6 +12,10 @@ from .lightningdit import LightningDiT, TimestepEmbedder
 
 
 
+from .pos_embed import rotate_half
+
+
+
 class HiddenLightningDiT(LightningDiT):
     def __init__(
         self, 
@@ -51,7 +55,6 @@ class HiddenLightningDiT(LightningDiT):
         if not share_patch_embedder:
             self.x_embedder_hid = nn.Linear(self.in_channels, self.hidden_size)
         
-            
         self.initialize_hidden_weights()
         
         
@@ -90,6 +93,41 @@ class HiddenLightningDiT(LightningDiT):
         x = x[:, 0].reshape(B, N, -1)        # (B, N, embed_dim)
         return x
         
+    def _make_hidden_safe_rope(self, num_image_tokens):
+        """
+        Wrap self.feat_rope so it only applies RoPE to the first num_image_tokens
+        tokens and leaves hidden tokens unrotated. Returns None if RoPE is disabled.
+        
+        Clones freqs_cos/freqs_sin buffers so each pass gets independent version
+        counters. Without cloning, DDP's inplace buffer broadcast (or torch.compile's
+        inplace optimisations) bump the version counter on the shared buffer, causing
+        "modified by an inplace operation" errors when backward traverses an earlier
+        pass's autograd graph.
+        """
+        if self.feat_rope is None:
+            return None
+        rope = self.feat_rope
+        n_img = num_image_tokens
+        # Clone once per forward call; all 28 blocks share these cloned tensors
+        freqs_cos = rope.freqs_cos.clone()
+        freqs_sin = rope.freqs_sin.clone()
+        
+        class _HiddenSafeRoPE(torch.nn.Module):
+            """Applies RoPE only to image tokens, passes hidden tokens through."""
+            def __init__(self, n_image, cos, sin):
+                super().__init__()
+                self.n_image = n_image
+                self.cos = cos
+                self.sin = sin
+            def forward(self, t):
+                t_img = t[:, :, :self.n_image, :]   # (B, H, n_img, D)
+                t_hid = t[:, :, self.n_image:, :]   # (B, H, n_hid, D)
+                # Inline RoPE with cloned buffers
+                t_img = t_img * self.cos + rotate_half(t_img) * self.sin
+                return torch.cat([t_img, t_hid], dim=2)
+        
+        return _HiddenSafeRoPE(n_img, freqs_cos, freqs_sin)
+
     def forward(self, x, t=None, y=None, x_hidden=None, t_hidden=None):
         """
         Forward pass of HiddenLightningDiT.
@@ -106,11 +144,15 @@ class HiddenLightningDiT(LightningDiT):
         use_checkpoint = self.use_checkpoint
 
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+        num_image_tokens = x.shape[1]
 
         x_hidden_emb = self.embed_hidden(x_hidden)  # (N, num_hidden_tokens, D)
         x_hidden_emb = x_hidden_emb + self.get_h_add_embeddings()
 
         x = torch.cat([x, x_hidden_emb], dim=1)  # (N, T + num_hidden_tokens, D)
+
+        # Wrap RoPE so it only applies to image tokens (first T), not hidden tokens
+        hidden_safe_rope = self._make_hidden_safe_rope(num_image_tokens)
 
         # Build per-sample conditioning: combine both timestep embeddings + class label
         # Both timestep signals are summed into a single D-dim vector (like t + y in base class).
@@ -130,9 +172,9 @@ class HiddenLightningDiT(LightningDiT):
 
         for idx, block in enumerate(self.blocks):
             if use_checkpoint:
-                x = checkpoint(block, x, c, self.feat_rope, use_reentrant=True)
+                x = checkpoint(block, x, c, hidden_safe_rope, use_reentrant=True)
             else:
-                x = block(x, c, self.feat_rope)
+                x = block(x, c, hidden_safe_rope)
             if self.use_repa and (idx+1) == self.repa_depth:
                 # Only project image tokens (exclude hidden tokens) to match feature_dino shape
                 repa_feat_proj = self.repa_projector(x[:, :-self.num_hidden_tokens, :])

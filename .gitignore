@@ -15,3 +15,8 @@ fusion_result.json
 output.log
 temp
 swanlog
+.venv-sfd
+*.log
+job_outputs
+wandb
+demo_images

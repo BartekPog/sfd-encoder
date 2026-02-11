@@ -1,0 +1,77 @@
+# Experiment 2: Fine-tune standard LightningDiT-XL/1 for another 400K steps
+# Starting from the 400K checkpoint, continuing standard (non-hidden) training
+# Target: 3x L40 (48GB), effective batch size 255
+
+ckpt_path: 'outputs/train/sfd_xl/checkpoints/0400000.pt' # for inference
+
+data:
+  data_path: '/scratch/inf0/user/bpogodzi/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
+  fid_reference_file: 'outputs/ADM_npz/VIRTUAL_imagenet256_labeled.npz'
+  image_size: 256
+  num_classes: 1000
+  num_workers: 8
+  latent_norm: true
+  latent_sv_norm: true
+  latent_multiplier: 1.0
+
+vae:
+  model_name: 'sdvae_f16d32'
+  downsample_ratio: 16
+
+model:
+  model_type: LightningDiT-XL/1
+  use_qknorm: true
+  use_swiglu: true
+  use_rope: true
+  use_rmsnorm: true
+  wo_shift: false
+  in_chans: 48
+  semantic_chans: 16
+  semfirst_delta_t: 0.3
+  semantic_weight: 2.0
+  use_repa: true
+  repa_dino_version: "dinov2_vitb14_reg"
+  repa_feat_depth: 2
+  repa_weight: 0.5
+  repa_mode: 'cos_mse'
+
+train:
+  max_steps: 400000
+  global_batch_size: 252   # 21 * 3 GPUs * 4 accum = 252
+  grad_accum_steps: 4
+  global_seed: 0
+  output_dir: 'outputs/train'
+  exp_name: 'sfd_xl_finetune'
+  ckpt: null
+  log_every: 100
+  ckpt_every: 40000
+  resume: true
+  weight_init: 'outputs/train/sfd_xl/checkpoints/0400000.pt'
+
+optimizer:
+  lr: 0.0002
+  beta2: 0.95
+  max_grad_norm: 1.0
+
+transport:
+  path_type: Linear
+  prediction: velocity
+  loss_weight: null
+  sample_eps: null
+  train_eps: null
+  use_cosine_loss: true
+  use_lognorm: true
+
+sample:
+  mode: ODE
+  sampling_method: dopri5
+  atol: 0.000001
+  rtol: 0.001
+  reverse: false
+  likelihood: false
+  num_sampling_steps: 250
+  cfg_scale: 1.0
+  per_proc_batch_size: 4
+  fid_num: 50000
+  cfg_interval_start: 0
+  timestep_shift: 0

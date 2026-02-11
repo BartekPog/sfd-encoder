@@ -17,6 +17,7 @@ import json
 import numpy as np
 import logging
 import os
+import contextlib
 import argparse
 from time import time
 from glob import glob
@@ -30,13 +31,15 @@ from diffusers.models import AutoencoderKL
 from models import gen_models
 from transport import create_transport, Sampler
 from accelerate import Accelerator
+from accelerate.utils import DistributedDataParallelKwargs
 from dataset.img_latent_dataset import ImgLatentDataset
 
-enable_wandb = False
+# Enable W&B via env var for Slurm/non-interactive runs.
+# Example: `export ENABLE_WANDB=1` (and optionally set `WANDB_PROJECT`, `WANDB_RUN_NAME`).
+enable_wandb = os.getenv("ENABLE_WANDB", "0") == "1"
 if enable_wandb:
     # pip install wandb
     import wandb
-    wandb.login()
 
 def do_train(train_config, accelerator):
     """
@@ -103,6 +106,9 @@ def do_train(train_config, accelerator):
     # load pretrained model
     if 'weight_init' in train_config['train']:
         checkpoint = torch.load(train_config['train']['weight_init'], map_location=lambda storage, loc: storage)
+        # Handle checkpoints that only have 'ema' key (no 'model' key)
+        if 'model' not in checkpoint and 'ema' in checkpoint:
+            checkpoint['model'] = checkpoint['ema']
         # remove the prefix 'module.' from the keys
         checkpoint['model'] = {k.replace('module.', ''): v for k, v in checkpoint['model'].items()}
         model = load_weights_with_shape_check(model, checkpoint, rank=rank)
@@ -148,8 +154,9 @@ def do_train(train_config, accelerator):
         latent_sv_norm=train_config['data']['latent_sv_norm'] if 'latent_sv_norm' in train_config['data'] else False,
         latent_multiplier=train_config['data']['latent_multiplier'] if 'latent_multiplier' in train_config['data'] else 0.18215,
     )
-    batch_size_per_gpu = int(np.round(train_config['train']['global_batch_size'] / accelerator.num_processes))
-    global_batch_size = batch_size_per_gpu * accelerator.num_processes
+    grad_accum_steps = train_config['train'].get('grad_accum_steps', 1)
+    batch_size_per_gpu = int(np.round(train_config['train']['global_batch_size'] / (accelerator.num_processes * grad_accum_steps)))
+    global_batch_size = batch_size_per_gpu * accelerator.num_processes * grad_accum_steps
     loader = DataLoader(
         dataset,
         batch_size=batch_size_per_gpu,
@@ -160,7 +167,7 @@ def do_train(train_config, accelerator):
     )
     if accelerator.is_main_process:
         logger.info(f"Dataset contains {len(dataset):,} images {train_config['data']['data_path']}")
-        logger.info(f"Batch size {batch_size_per_gpu} per gpu, with {global_batch_size} global batch size")
+        logger.info(f"Batch size {batch_size_per_gpu} per gpu, with {global_batch_size} global batch size (grad_accum={grad_accum_steps})")
     
     if 'valid_path' in train_config['data']:
         valid_dataset = ImgLatentDataset(
@@ -201,6 +208,7 @@ def do_train(train_config, accelerator):
             if accelerator.is_main_process:
                 logger.info(f"Resuming training from checkpoint: {latest_checkpoint}")
         else:
+            train_steps = 0
             if accelerator.is_main_process:
                 logger.info("No checkpoint found. Starting training from scratch.")
 
@@ -243,128 +251,141 @@ def do_train(train_config, accelerator):
                 x = x.to(device)
                 y = y.to(device)
             model_kwargs = dict(y=y)
-            # loss_dict = transport.training_losses(model, x, model_kwargs)
-            use_repa=train_config['model']['use_repa'] if 'use_repa' in train_config['model'] else False
-            use_hidden = train_config['model'].get('use_hidden_tokens', False)
-            if use_hidden:
-                hidden_weight = train_config['model'].get('hidden_weight', 1.0)
-                normalize_hidden = train_config['model'].get('normalize_hidden', True)
-                hidden_reg_weight = train_config['model'].get('hidden_reg_weight', 0.01)
-                loss_dict = transport.training_losses_hidden(
-                    model, x, model_kwargs,
-                    use_repa=use_repa, feature_dino=feature_dino,
-                    hidden_weight=hidden_weight,
-                    normalize_hidden=normalize_hidden,
-                    hidden_reg_weight=hidden_reg_weight,
-                )
-            else:
-                loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
-            # if 'cos_loss' in loss_dict:
-            #     mse_loss = loss_dict["loss"].mean()
-            #     loss = loss_dict["cos_loss"].mean() + mse_loss
-            # else:
-            #     loss = loss_dict["loss"].mean()
-            if 'cos_loss' in loss_dict and 'repa_loss' in loss_dict:
-                mse_loss = loss_dict["loss"].mean()
-                cos_loss = loss_dict["cos_loss"].mean()
-                repa_loss = loss_dict["repa_loss"].mean()
-                loss = cos_loss + mse_loss + repa_loss
-            elif 'cos_loss' in loss_dict:
-                mse_loss = loss_dict["loss"].mean()
-                loss = loss_dict["cos_loss"].mean() + mse_loss
-            else:
-                loss = loss_dict["loss"].mean()
-            # Add hidden denoising loss if present (from training_losses_hidden)
-            if 'hidden_loss' in loss_dict:
-                hidden_loss = loss_dict["hidden_loss"].mean()
-                loss = loss + hidden_loss
-            if 'hidden_reg_loss' in loss_dict:
-                loss = loss + loss_dict["hidden_reg_loss"]
-            opt.zero_grad()
-            accelerator.backward(loss)
-            if 'max_grad_norm' in train_config['optimizer']:
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), train_config['optimizer']['max_grad_norm'])
-            opt.step()
-            update_ema(ema, model.module)
 
-            # Log loss values:
-            # if 'cos_loss' in loss_dict:
-            #     running_loss += mse_loss.item()
-            # else:
-            #     running_loss += loss.item()
-            if 'cos_loss' in loss_dict and 'repa_loss' in loss_dict:
-                running_loss += mse_loss.item()
-            elif 'cos_loss' in loss_dict:
-                running_loss += mse_loss.item()
-            else:
-                running_loss += loss.item()
-            log_steps += 1
-            train_steps += 1
-            if train_steps % train_config['train']['log_every'] == 0:
-                # Measure training speed:
-                torch.cuda.synchronize()
-                end_time = time()
-                steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
-                if accelerator.is_main_process:
-                    logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                    writer.add_scalar('Loss/train', avg_loss, train_steps)
-                    # Log loss to wandb
-                    if enable_wandb:
-                        wandb_losses = {'avg_loss': avg_loss}
-                        wandb_losses['mse_loss'] = loss_dict["loss"].mean().item()
-                        wandb_losses['total_loss'] = wandb_losses['mse_loss']
-                        if 'cos_loss' in loss_dict:
-                            wandb_losses['cos_loss'] = loss_dict["cos_loss"].mean().item()
-                            wandb_losses['total_loss'] += wandb_losses['cos_loss']
-                        if 'repa_loss' in loss_dict:
-                            wandb_losses['repa_loss'] = loss_dict["repa_loss"].mean().item()
-                            wandb_losses['total_loss'] += wandb_losses['repa_loss']
-                        if 'hidden_loss' in loss_dict:
-                            wandb_losses['hidden_loss'] = loss_dict["hidden_loss"].mean().item()
-                            wandb_losses['total_loss'] += wandb_losses['hidden_loss']
-                        if 'hidden_reg_loss' in loss_dict:
-                            wandb_losses['hidden_reg_loss'] = loss_dict["hidden_reg_loss"].item()
-                            wandb_losses['total_loss'] += wandb_losses['hidden_reg_loss']
-                        # print(wandb_losses)
-                        wandb.log(wandb_losses, step=train_steps)
-                # Reset monitoring variables:
-                running_loss = 0
-                log_steps = 0
-                start_time = time()
+            with accelerator.accumulate(model):
+                # loss_dict = transport.training_losses(model, x, model_kwargs)
+                use_repa=train_config['model']['use_repa'] if 'use_repa' in train_config['model'] else False
+                use_hidden = train_config['model'].get('use_hidden_tokens', False)
+                if use_hidden:
+                    hidden_weight = train_config['model'].get('hidden_weight', 1.0)
+                    normalize_hidden = train_config['model'].get('normalize_hidden', True)
+                    hidden_reg_weight = train_config['model'].get('hidden_reg_weight', 0.01)
 
-            # Save checkpoint:
-            if train_steps % train_config['train']['ckpt_every'] == 0 and train_steps > 0:
-                if accelerator.is_main_process:
-                    checkpoint = {
-                        "model": model.module.state_dict(),
-                        "ema": ema.state_dict(),
-                        "opt": opt.state_dict(),
-                        "config": train_config,
-                    }
-                    checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                    torch.save(checkpoint, checkpoint_path)
-                    if accelerator.is_main_process:
-                        logger.info(f"Saved checkpoint to {checkpoint_path}")
-                dist.barrier()
+                    # backward_fn: called inside training_losses_hidden to backward
+                    # Pass 3's loss immediately, freeing its activations before Pass 2
+                    # runs. Uses no_sync to defer gradient sync to the main backward.
+                    def _hidden_backward_fn(loss):
+                        no_sync = getattr(model, 'no_sync', None)
+                        ctx = no_sync() if no_sync is not None else contextlib.nullcontext()
+                        with ctx:
+                            accelerator.backward(loss)
 
-                # Evaluate on validation set
-                if 'valid_path' in train_config['data']:
+                    loss_dict = transport.training_losses_hidden(
+                        model, x, model_kwargs,
+                        use_repa=use_repa, feature_dino=feature_dino,
+                        hidden_weight=hidden_weight,
+                        normalize_hidden=normalize_hidden,
+                        hidden_reg_weight=hidden_reg_weight,
+                        backward_fn=_hidden_backward_fn,
+                    )
+                else:
+                    loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
+                # if 'cos_loss' in loss_dict:
+                #     mse_loss = loss_dict["loss"].mean()
+                #     loss = loss_dict["cos_loss"].mean() + mse_loss
+                # else:
+                #     loss = loss_dict["loss"].mean()
+                if 'cos_loss' in loss_dict and 'repa_loss' in loss_dict:
+                    mse_loss = loss_dict["loss"].mean()
+                    cos_loss = loss_dict["cos_loss"].mean()
+                    repa_loss = loss_dict["repa_loss"].mean()
+                    loss = cos_loss + mse_loss + repa_loss
+                elif 'cos_loss' in loss_dict:
+                    mse_loss = loss_dict["loss"].mean()
+                    loss = loss_dict["cos_loss"].mean() + mse_loss
+                else:
+                    loss = loss_dict["loss"].mean()
+                # Add hidden denoising loss if present and not yet backward-ed
+                # (When backward_fn is used, hidden_loss is already detached/backward-ed)
+                if 'hidden_loss' in loss_dict and loss_dict['hidden_loss'].requires_grad:
+                    hidden_loss = loss_dict["hidden_loss"].mean()
+                    loss = loss + hidden_loss
+                if 'hidden_reg_loss' in loss_dict:
+                    loss = loss + loss_dict["hidden_reg_loss"]
+                accelerator.backward(loss)
+                if 'max_grad_norm' in train_config['optimizer']:
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(model.parameters(), train_config['optimizer']['max_grad_norm'])
+                opt.step()
+                opt.zero_grad()
+
+            # Only update EMA and count steps when gradients are actually synced
+            if accelerator.sync_gradients:
+                update_ema(ema, model.module)
+
+                # Log loss values:
+                if 'cos_loss' in loss_dict and 'repa_loss' in loss_dict:
+                    running_loss += mse_loss.item()
+                elif 'cos_loss' in loss_dict:
+                    running_loss += mse_loss.item()
+                else:
+                    running_loss += loss.item()
+                log_steps += 1
+                train_steps += 1
+                if train_steps % train_config['train']['log_every'] == 0:
+                    # Measure training speed:
+                    torch.cuda.synchronize()
+                    end_time = time()
+                    steps_per_sec = log_steps / (end_time - start_time)
+                    # Reduce loss history over all processes:
+                    avg_loss = torch.tensor(running_loss / log_steps, device=device)
+                    dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                    avg_loss = avg_loss.item() / dist.get_world_size()
                     if accelerator.is_main_process:
-                        logger.info(f"Start evaluating at step {train_steps}")
-                    val_loss = evaluate(model, valid_loader, device, transport, (0.0, 1.0))
-                    dist.all_reduce(val_loss, op=dist.ReduceOp.SUM)
-                    val_loss = val_loss.item() / dist.get_world_size()
+                        logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                        writer.add_scalar('Loss/train', avg_loss, train_steps)
+                        # Log loss to wandb
+                        if enable_wandb:
+                            wandb_losses = {'avg_loss': avg_loss}
+                            wandb_losses['mse_loss'] = loss_dict["loss"].mean().item()
+                            wandb_losses['total_loss'] = wandb_losses['mse_loss']
+                            if 'cos_loss' in loss_dict:
+                                wandb_losses['cos_loss'] = loss_dict["cos_loss"].mean().item()
+                                wandb_losses['total_loss'] += wandb_losses['cos_loss']
+                            if 'repa_loss' in loss_dict:
+                                wandb_losses['repa_loss'] = loss_dict["repa_loss"].mean().item()
+                                wandb_losses['total_loss'] += wandb_losses['repa_loss']
+                            if 'hidden_loss' in loss_dict:
+                                wandb_losses['hidden_loss'] = loss_dict["hidden_loss"].mean().item()
+                                wandb_losses['total_loss'] += wandb_losses['hidden_loss']
+                            if 'hidden_reg_loss' in loss_dict:
+                                wandb_losses['hidden_reg_loss'] = loss_dict["hidden_reg_loss"].item()
+                                wandb_losses['total_loss'] += wandb_losses['hidden_reg_loss']
+                            # print(wandb_losses)
+                            wandb.log(wandb_losses, step=train_steps)
+                    # Reset monitoring variables:
+                    running_loss = 0
+                    log_steps = 0
+                    start_time = time()
+
+                # Save checkpoint:
+                if train_steps % train_config['train']['ckpt_every'] == 0 and train_steps > 0:
                     if accelerator.is_main_process:
-                        logger.info(f"Validation Loss: {val_loss:.4f}")
-                        writer.add_scalar('Loss/validation', val_loss, train_steps)
-                    model.train()
-            if train_steps >= train_config['train']['max_steps']:
-                break
+                        checkpoint = {
+                            "model": model.module.state_dict(),
+                            "ema": ema.state_dict(),
+                            "opt": opt.state_dict(),
+                            "config": train_config,
+                        }
+                        checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
+                        torch.save(checkpoint, checkpoint_path)
+                        if accelerator.is_main_process:
+                            logger.info(f"Saved checkpoint to {checkpoint_path}")
+                    dist.barrier()
+
+                    # Evaluate on validation set
+                    if 'valid_path' in train_config['data']:
+                        if accelerator.is_main_process:
+                            logger.info(f"Start evaluating at step {train_steps}")
+                        val_loss = evaluate(model, valid_loader, device, transport, (0.0, 1.0))
+                        dist.all_reduce(val_loss, op=dist.ReduceOp.SUM)
+                        val_loss = val_loss.item() / dist.get_world_size()
+                        if accelerator.is_main_process:
+                            logger.info(f"Validation Loss: {val_loss:.4f}")
+                            writer.add_scalar('Loss/validation', val_loss, train_steps)
+                        model.train()
+                if train_steps >= train_config['train']['max_steps']:
+                    break
         if train_steps >= train_config['train']['max_steps']:
             break
 
@@ -453,8 +474,18 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='configs/debug.yaml')
     args = parser.parse_args()
 
-    accelerator = Accelerator()
     train_config = load_config(args.config)
+    grad_accum_steps = train_config['train'].get('grad_accum_steps', 1) if 'grad_accum_steps' in train_config.get('train', {}) else 1
+    use_hidden = train_config.get('model', {}).get('use_hidden_tokens', False)
+    ddp_kwargs = DistributedDataParallelKwargs(
+        find_unused_parameters=use_hidden,  # hidden-specific params only used in unwrapped passes
+        broadcast_buffers=not use_hidden,   # RoPE buffers are deterministic; broadcasting
+                                            # modifies them inplace, breaking multi-pass autograd
+    )
+    accelerator = Accelerator(
+        gradient_accumulation_steps=grad_accum_steps,
+        kwargs_handlers=[ddp_kwargs] if use_hidden else [],
+    )
     if accelerator.is_main_process and enable_wandb:
         # Initialize wandb
         wandb.init(
@@ -463,6 +494,6 @@ if __name__ == "__main__":
             name=train_config['train']['exp_name'],
 
             # Set hyperparameters
-            config=train_config
+            config=OmegaConf.to_container(train_config, resolve=True)
         )
     do_train(train_config, accelerator)
