@@ -1,8 +1,10 @@
 --extra-index-url https://download.pytorch.org/whl/cu121
 
 # cu121 is to meet our nvidia env. you can change it to other versions
-torch==2.2.0+cu121
-torchvision==0.17.0+cu121
+#torch==2.2.0+cu121
+#torchvision==0.17.0+cu121
+torch
+torchvision
 
 timm==1.0.12
 diffusers==0.32.1
@@ -10,11 +12,13 @@ accelerate
 torchdiffeq
 pytorch_fid
 tensorboard==2.8.0
+protobuf==3.20.3
 wandb
 omegaconf==2.3.0
 einops
 fairscale
 safetensors
+jaxtyping
 tqdm
 
 # # use for reconstruction evaluation, optional

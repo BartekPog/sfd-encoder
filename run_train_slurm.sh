@@ -59,14 +59,16 @@ for i in $(seq 1 "${NUM_CHAINS}"); do
 #SBATCH --mem=${MEM}
 #SBATCH --gres gpu:${GPUS}
 
+
+echo "module load python-waterboa ffmpeg cuda/13.0" >> $jobscript
 echo -n 'date: '; date '+%Y-%m-%d %H:%M:%S'
 echo "Chain ${i}/${NUM_CHAINS} for ${EXP_NAME}"
 
 source ~/.bashrc
 source ./.venv-sfd/bin/activate
-
-export TORCH_HOME=/scratch/inf0/user/bpogodzi/torch-cache
-export HF_HOME=/BS/var-training/work/mdlm-decoding/tmp
+pip install -r requirements.txt
+export TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch
+export HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf
 
 # ---- Weights & Biases (optional) ----
 # Enable with `ENABLE_WANDB=1` (default below turns it on for Slurm jobs).

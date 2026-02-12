@@ -9,7 +9,13 @@ import torch.backends.cuda
 import torch.backends.cudnn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    _TENSORBOARD_IMPORT_ERROR = None
+except Exception as exc:
+    # Keep training alive when tensorboard/protobuf versions are incompatible.
+    SummaryWriter = None
+    _TENSORBOARD_IMPORT_ERROR = exc
 
 import math
 import yaml
@@ -41,6 +47,26 @@ if enable_wandb:
     # pip install wandb
     import wandb
 
+
+def load_checkpoint_trusted(path, map_location):
+    """
+    Load trusted training checkpoints across PyTorch versions.
+    Raises a clear error when a Git LFS pointer is provided instead of real weights.
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(128)
+        if header.startswith(b"version https://git-lfs.github.com/spec/v1"):
+            raise RuntimeError(
+                f"Checkpoint file at '{path}' is a Git LFS pointer, not model weights. "
+                "Download real checkpoints first (e.g. run download_hf_files.py or git lfs pull)."
+            )
+    except OSError:
+        # Let torch.load raise the canonical file-not-found/permission error.
+        pass
+
+    return torch.load(path, map_location=map_location, weights_only=False)
+
 def do_train(train_config, accelerator):
     """
     Trains a LightningDiT.
@@ -64,12 +90,16 @@ def do_train(train_config, accelerator):
         logger.info(f"Experiment directory created at {experiment_dir}")
         tensorboard_dir_log = f"tensorboard_logs/{exp_name}"
         os.makedirs(tensorboard_dir_log, exist_ok=True)
-        writer = SummaryWriter(log_dir=tensorboard_dir_log)
+        writer = None
+        if SummaryWriter is not None:
+            writer = SummaryWriter(log_dir=tensorboard_dir_log)
 
-        # add configs to tensorboard
-        # config_str=json.dumps(train_config, indent=4)
-        config_str=json.dumps(OmegaConf.to_container(train_config), indent=4)
-        writer.add_text('training configs', config_str, global_step=0)
+            # add configs to tensorboard
+            # config_str=json.dumps(train_config, indent=4)
+            config_str=json.dumps(OmegaConf.to_container(train_config), indent=4)
+            writer.add_text('training configs', config_str, global_step=0)
+        else:
+            logger.warning(f"TensorBoard disabled due to import error: {_TENSORBOARD_IMPORT_ERROR}")
     checkpoint_dir = f"{train_config['train']['output_dir']}/{train_config['train']['exp_name']}/checkpoints"
 
     # get rank
@@ -105,7 +135,10 @@ def do_train(train_config, accelerator):
 
     # load pretrained model
     if 'weight_init' in train_config['train']:
-        checkpoint = torch.load(train_config['train']['weight_init'], map_location=lambda storage, loc: storage)
+        checkpoint = load_checkpoint_trusted(
+            train_config['train']['weight_init'],
+            map_location=lambda storage, loc: storage,
+        )
         # Handle checkpoints that only have 'ema' key (no 'model' key)
         if 'model' not in checkpoint and 'ema' in checkpoint:
             checkpoint['model'] = checkpoint['ema']
@@ -210,7 +243,10 @@ def do_train(train_config, accelerator):
                 numeric_checkpoints.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
                 latest_checkpoint = numeric_checkpoints[-1]
         if latest_checkpoint is not None:
-            checkpoint = torch.load(latest_checkpoint, map_location=lambda storage, loc: storage)
+            checkpoint = load_checkpoint_trusted(
+                latest_checkpoint,
+                map_location=lambda storage, loc: storage,
+            )
             model.load_state_dict(checkpoint['model'])
             # opt.load_state_dict(checkpoint['opt'])
             ema.load_state_dict(checkpoint['ema'])
@@ -227,7 +263,10 @@ def do_train(train_config, accelerator):
 
     train_config['train']['load_ckpt'] = train_config['train']['load_ckpt'] if 'load_ckpt' in train_config['train'] else False
     if train_config['train']['load_ckpt']:
-        checkpoint = torch.load(train_config['train']['load_ckpt'], map_location=lambda storage, loc: storage)
+        checkpoint = load_checkpoint_trusted(
+            train_config['train']['load_ckpt'],
+            map_location=lambda storage, loc: storage,
+        )
         model.load_state_dict(checkpoint['model'])
         # opt.load_state_dict(checkpoint['opt'])
         ema.load_state_dict(checkpoint['ema'])
@@ -349,7 +388,8 @@ def do_train(train_config, accelerator):
                     avg_loss = avg_loss.item() / dist.get_world_size()
                     if accelerator.is_main_process:
                         logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                        writer.add_scalar('Loss/train', avg_loss, train_steps)
+                        if writer is not None:
+                            writer.add_scalar('Loss/train', avg_loss, train_steps)
                         # Log loss to wandb
                         if enable_wandb:
                             wandb_losses = {'avg_loss': avg_loss}
@@ -406,7 +446,8 @@ def do_train(train_config, accelerator):
                     val_loss = val_loss.item() / dist.get_world_size()
                     if accelerator.is_main_process:
                         logger.info(f"Validation Loss: {val_loss:.4f}")
-                        writer.add_scalar('Loss/validation', val_loss, train_steps)
+                        if writer is not None:
+                            writer.add_scalar('Loss/validation', val_loss, train_steps)
                     model.train()
                 if train_steps >= train_config['train']['max_steps']:
                     break
@@ -479,7 +520,8 @@ def create_logger(logging_dir):
     """
     Create a logger that writes to a log file and stdout.
     """
-    if dist.get_rank() == 0:  # real logger
+    rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+    if rank == 0:  # real logger
         logging.basicConfig(
             level=logging.INFO,
             format='[\033[34m%(asctime)s\033[0m] %(message)s',
@@ -527,7 +569,7 @@ if __name__ == "__main__":
                     _ckpt_to_probe = _numeric[-1]
             if _ckpt_to_probe:
                 try:
-                    _meta = torch.load(_ckpt_to_probe, map_location='cpu')
+                    _meta = load_checkpoint_trusted(_ckpt_to_probe, map_location='cpu')
                     wandb_run_id = _meta.get('wandb_run_id', None)
                     if wandb_run_id:
                         logger.info(f"Resuming wandb run {wandb_run_id} from {_ckpt_to_probe}")

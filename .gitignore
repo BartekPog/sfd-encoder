@@ -20,3 +20,5 @@ swanlog
 job_outputs
 wandb
 demo_images
+
+nohup.out

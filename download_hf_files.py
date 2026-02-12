@@ -1,38 +1,55 @@
 #!/usr/bin/env python3
 """
-Download files from HuggingFace Hub using the Python API.
-This script replaces huggingface-cli commands.
+Download files from HuggingFace.
 """
-from huggingface_hub import snapshot_download
 import os
 import shutil
+import subprocess
+
+try:
+    from huggingface_hub import snapshot_download
+except Exception:
+    snapshot_download = None
 
 def download_and_move(repo_id, include_pattern, local_dir, dest_dir):
     """Download files from HuggingFace and move them to destination."""
     print(f"Downloading {include_pattern} from {repo_id}...")
-    
-    # Download files
-    snapshot_download(
-        repo_id=repo_id,
-        allow_patterns=include_pattern,
-        local_dir=local_dir,
-        local_dir_use_symlinks=False
-    )
-    
-    # Move files to destination
-    source_path = os.path.join(local_dir, include_pattern.replace("/*", ""))
+
+    # Prefer huggingface_hub if available, but fall back to git clone when the
+    # local hub/requests stack is incompatible (seen as MissingSchema URL errors).
+    snapshot_dir = None
+    if snapshot_download is not None:
+        try:
+            snapshot_dir = snapshot_download(
+                repo_id=repo_id,
+                cache_dir=local_dir,
+            )
+        except Exception as exc:
+            print(f"snapshot_download failed: {exc}")
+            print("Falling back to git clone for this repo...")
+
+    if snapshot_dir is None:
+        repo_cache_name = repo_id.replace("/", "__")
+        snapshot_dir = os.path.join(local_dir, repo_cache_name)
+        if not os.path.exists(snapshot_dir):
+            os.makedirs(local_dir, exist_ok=True)
+            subprocess.check_call(
+                ["git", "clone", "https://huggingface.co/" + repo_id, snapshot_dir]
+            )
+
+    # Copy files to destination, resolving symlinks so the copies are
+    # self-contained and survive deletion of the HuggingFace cache / temp dir.
+    source_path = os.path.join(snapshot_dir, include_pattern.replace("/*", ""))
     if os.path.exists(source_path):
-        print(f"Moving {source_path} to {dest_dir}")
+        print(f"Copying {source_path} to {dest_dir} (resolving symlinks)")
         os.makedirs(os.path.dirname(dest_dir), exist_ok=True)
         if os.path.isdir(source_path):
-            # Move directory contents
             if os.path.exists(dest_dir):
                 shutil.rmtree(dest_dir)
-            shutil.move(source_path, dest_dir)
+            shutil.copytree(source_path, dest_dir, symlinks=False)
         else:
-            # Move file
-            shutil.move(source_path, dest_dir)
-        print(f"Successfully moved to {dest_dir}")
+            shutil.copy2(source_path, dest_dir, follow_symlinks=True)
+        print(f"Successfully copied to {dest_dir}")
     else:
         print(f"Warning: {source_path} not found after download")
 

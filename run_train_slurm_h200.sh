@@ -63,6 +63,7 @@ echo "Chain ${i}/${NUM_CHAINS} for ${EXP_NAME}"
 source ~/.bashrc
 module load python-waterboa ffmpeg cuda/13.0
 source ./.venv-sfd/bin/activate
+pip install -r requirements.txt
 
 export TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch
 export HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf

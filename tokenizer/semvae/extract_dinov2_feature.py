@@ -59,8 +59,18 @@ class DINOFeatureExtractor:
                 **self.vae_config['model']['params']
             )
 
-            # Load checkpoint
-            checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
+            # Load checkpoint.
+            # PyTorch 2.6+ changed torch.load default `weights_only=True`, which
+            # breaks loading this training checkpoint format. Use
+            # `weights_only=False` when available, and fall back for older torch.
+            try:
+                checkpoint = torch.load(
+                    vae_checkpoint_path,
+                    map_location='cpu',
+                    weights_only=False,
+                )
+            except TypeError:
+                checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
             msg = self.vae.load_state_dict(checkpoint['model_state_dict'])
             print('Missing keys:', msg.missing_keys)
             print('Unexpected keys:', msg.unexpected_keys)

@@ -1,12 +1,12 @@
 
 
 # Job constants
-PARTITION="gpu17"   # gpu16 / gpu20 / gpu22
-TIME="00-24:00:00"  # NOTE make sure that one checkpointing interval takes less than this time!
+# PARTITION="gpu17"   # gpu16 / gpu20 / gpu22
+TIME="00-18:00:00"  # NOTE make sure that one checkpointing interval takes less than this time!
 # MEMORY="125G"
-NUM_GPUS=3
+NUM_GPUS=1
 # NUM_CORES=$((5* NUM_GPUS)) #12* NUM_GPUS
-GPUS="l40:${NUM_GPUS}"            # a100:2
+GPUS="h200:${NUM_GPUS}"            # a100:2
 
 
 
@@ -25,7 +25,7 @@ mkdir -p "$(dirname "${jobscript}")"
 mkdir -p "$(dirname "${output}")"
 echo "#!/bin/bash" > $jobscript
 ### Partition name
-echo "#SBATCH -p ${PARTITION}" >> $jobscript
+# echo "#SBATCH -p ${PARTITION}" >> $jobscript
 ### Job name
 echo "#SBATCH --job-name ${config}" >> $jobscript
 ### File for the output
@@ -61,9 +61,15 @@ echo "echo -n 'date: ';(date '+%Y-%m-%d %H:%M:%S')" >> $jobscript
 
 echo "source ~/.bashrc" >> $jobscript
 # echo "module load ffmpeg cuda/13.0" >> $jobscript
+echo "module load python-waterboa ffmpeg cuda/13.0" >> $jobscript
+# echo "rm -rf .venv-sfd" >> $jobscript
+# echo "python3 -m venv .venv-sfd" >> $jobscript
 echo "source ./.venv-sfd/bin/activate" >> $jobscript
+echo "pip install torch wandb" >> $jobscript
+echo "pip install -r requirements.txt" >> $jobscript
+
 # echo "source ./.venv/bin/activate" >> $jobscript
-echo "DEBUG=False TORCH_HOME=/scratch/inf0/user/bpogodzi/torch-cache HF_HOME=/BS/var-training/work/mdlm-decoding/tmp GPUS_PER_NODE=$NUM_GPUS bash run_extraction.sh tokenizer/configs/sdvae_f16d32_semvaebasech16.yaml semvae dinov2_vitb14_reg" >> $jobscript
+echo "DEBUG=False TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf GPUS_PER_NODE=$NUM_GPUS bash run_extraction.sh tokenizer/configs/sdvae_f16d32_semvaebasech16.yaml semvae dinov2_vitb14_reg" >> $jobscript
 
 
 echo $jobscript

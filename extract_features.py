@@ -20,8 +20,10 @@ def main(args):
     assert torch.cuda.is_available(), "Extract features currently requires at least one GPU."
 
     # Setup DDP:
+    ddp_initialized = False
     try:
         dist.init_process_group("nccl")
+        ddp_initialized = True
         rank = dist.get_rank()
         device = rank % torch.cuda.device_count()
         world_size = dist.get_world_size()
@@ -499,23 +501,25 @@ def main(args):
             print(f'Saved {save_filename}')
 
     # Calculate latents stats
-    dist.barrier()
+    if ddp_initialized:
+        dist.barrier()
     if rank == 0:
         print('Calculating latents stats...')
         latent_sv_norm = args.semantic_feat_type == 'semvae'
         dataset = ImgLatentDataset(output_dir, latent_norm=True, latent_sv_norm=latent_sv_norm)
-    dist.barrier()
-    dist.destroy_process_group()
+    if ddp_initialized:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", type=str, default='/scratch/inf0/user/mparcham/ILSVRC2012/train')
+    parser.add_argument("--data_path", type=str, default='/dais/fs/scratch/bpogodzi/hidden-diffusion/imagenet/ILSVRC2012/train')
     parser.add_argument("--data_split", type=str, default='imagenet_train')
-    parser.add_argument("--output_path", type=str, default="/scratch/inf0/user/bpogodzi/datasets/imagenet-sfd-latents/train")
+    parser.add_argument("--output_path", type=str, default="/dais/fs/scratch/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train")
     parser.add_argument("--config", type=str, default="config_details.yaml")
     parser.add_argument("--image_size", type=int, default=256)
-    parser.add_argument("--batch_size", type=int, default=20)
+    parser.add_argument("--batch_size", type=int, default=40)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num_workers", type=int, default=8)
     
