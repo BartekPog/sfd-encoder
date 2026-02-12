@@ -975,6 +975,140 @@ class Sampler:
 
         return _ode.sample
 
+    def sample_ode_semantic_first_hidden(
+        self,
+        *,
+        sampling_method="dopri5",
+        num_steps=50,
+        atol=1e-6,
+        rtol=1e-3,
+        reverse=False,
+        timestep_shift=0.0,
+        semfirst_delta_t=0.3,
+        semantic_chans=8,
+        num_hidden_tokens=8,
+        hidden_token_dim=32,
+    ):
+        """
+        Returns a sampling function for joint image + hidden token ODE with
+        semantic-first scheduling.
+
+        Hidden tokens follow the SAME noise schedule as semantic tokens:
+          t_sem = t_hid = t.clamp(max=1.0)
+          t_tex = (t - delta_t).clamp(min=0.0)
+
+        Global time runs over [0, 1 + delta_t].  Three phases:
+          Phase 1: t ∈ [0, delta_t]          → semantic + hidden update, texture frozen
+          Phase 2: t ∈ [delta_t, 1.0]        → all update
+          Phase 3: t ∈ [1.0, 1.0 + delta_t]  → texture only, semantic + hidden frozen
+
+        State is a tuple (x_img, x_hidden) to work with torchdiffeq's tuple ODE.
+
+        Args:
+            sampling_method: ODE solver method
+            num_steps: number of integration steps
+            atol, rtol: solver tolerances
+            reverse: not supported
+            timestep_shift: timestep warping parameter
+            semfirst_delta_t: time offset (semantic/hidden lead texture)
+            semantic_chans: number of semantic channels (last channels of x_img)
+            num_hidden_tokens: number of hidden tokens
+            hidden_token_dim: dimension per hidden token
+        """
+        t_max = 1.0 + semfirst_delta_t
+        texture_chans = None
+
+        def joint_drift_semantic_first(state, t, model, **model_kwargs):
+            """
+            Joint drift for (x_img, x_hidden) with semantic-first scheduling.
+            """
+            nonlocal texture_chans
+            x_img, x_hidden = state
+            B, C = x_img.shape[:2]
+            device = x_img.device
+
+            if texture_chans is None:
+                texture_chans = C - semantic_chans
+
+            # Compute per-component times
+            t_sem = t.clamp(max=1.0)                     # semantic time
+            t_tex = (t - semfirst_delta_t).clamp(min=0.0) # texture time (delayed)
+            t_hid = t_sem                                  # hidden = same as semantic
+
+            # Model expects tuple timestep for semantic first
+            t_tuple = (t_tex, t_sem)
+
+            # Forward: model returns (img_velocity, hidden_velocity)
+            result = model(x_img, t=t_tuple, x_hidden=x_hidden,
+                           t_hidden=t_hid, **model_kwargs)
+            if isinstance(result, tuple):
+                img_vel, hidden_vel = result[0], result[1]
+            else:
+                raise ValueError("Model must return (img_output, hidden_output) tuple")
+
+            # Apply channel masking to image velocity
+            img_mask = th.zeros_like(x_img)
+            # Texture channels: active when t >= delta_t
+            img_mask[:, :texture_chans, ...] = (t >= semfirst_delta_t).view(
+                B, 1, *[1] * (x_img.dim() - 2))
+            # Semantic channels: active when t <= 1.0
+            img_mask[:, -semantic_chans:, ...] = (t <= 1.0).view(
+                B, 1, *[1] * (x_img.dim() - 2))
+            img_vel = img_vel * img_mask
+
+            # Hidden velocity: active when t <= 1.0 (same as semantic)
+            hid_mask = (t <= 1.0).view(B, *[1] * (x_hidden.dim() - 1)).float()
+            hidden_vel = hidden_vel * hid_mask
+
+            return (img_vel, hidden_vel)
+
+        if reverse:
+            raise NotImplementedError("Reverse sampling not yet implemented for semantic first hidden")
+
+        t0 = 0.0
+        t1 = t_max
+
+        _ode = ode(
+            drift=joint_drift_semantic_first,
+            t0=t0,
+            t1=t1,
+            sampler_type=sampling_method,
+            num_steps=num_steps,
+            atol=atol,
+            rtol=rtol,
+            timestep_shift=timestep_shift,
+            semfirst_delta_t=semfirst_delta_t,
+        )
+
+        def _sample_fn(z_img, model_fn, **model_kwargs):
+            """
+            Sample image + hidden tokens jointly via semantic-first ODE.
+            Automatically creates hidden noise from z_img's device/batch.
+
+            Args:
+                z_img: (B, C, H, W) initial noise for image
+                model_fn: model forward function (model.forward or model.forward_with_cfg)
+            Returns:
+                list with single element: final x_img at t=1+delta_t
+                (matches the return format of sample_ode_semantic_first)
+            """
+            B = z_img.shape[0]
+            device = z_img.device
+            z_hidden = th.randn(B, num_hidden_tokens, hidden_token_dim,
+                                device=device)
+            init_state = (z_img, z_hidden)
+            samples = _ode.sample(init_state, model_fn, **model_kwargs)
+            # odeint returns (img_trajectory, hidden_trajectory)
+            # each is (num_timepoints, B, ...)
+            # We want the last timepoint for image
+            if isinstance(samples, tuple):
+                img_final = samples[0][-1]
+            else:
+                img_final = samples[-1]
+            return [img_final]
+
+        return _sample_fn
+
     def sample_ode_likelihood(
         self,
         *,

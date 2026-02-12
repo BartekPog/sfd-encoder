@@ -305,11 +305,15 @@ def HiddenLightningDiT_XL_1_H8(**kwargs):
 def HiddenLightningDiT_XL_1_H16(**kwargs):
     return HiddenLightningDiT(depth=28, hidden_size=1152, patch_size=1, num_heads=16, num_hidden_tokens=16, **kwargs)
 
+def HiddenLightningDiT_B_1_H8(**kwargs):
+    return HiddenLightningDiT(depth=12, hidden_size=768, patch_size=1, num_heads=12, num_hidden_tokens=8, **kwargs)
+
 def HiddenLightningDiT_1p0B_H8(**kwargs):
     return HiddenLightningDiT(depth=24, hidden_size=1536, patch_size=1, num_heads=24, num_hidden_tokens=8, **kwargs)
 
 
 HiddenLightningDiT_models = {
+    "HiddenLightningDiT_B_1_H8": HiddenLightningDiT_B_1_H8,
     "HiddenLightningDiT_XL_1_H8": HiddenLightningDiT_XL_1_H8,
     "HiddenLightningDiT_XL_1_H16": HiddenLightningDiT_XL_1_H16,
     "HiddenLightningDiT_1p0B_H8": HiddenLightningDiT_1p0B_H8,

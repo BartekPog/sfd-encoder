@@ -385,6 +385,7 @@ def do_train(train_config, accelerator):
                             "opt": opt.state_dict(),
                             "config": train_config,
                             "train_steps": train_steps,
+                            "wandb_run_id": os.getenv("WANDB_RUN_ID", None),
                         }
                         if save_last:
                             last_path = f"{checkpoint_dir}/last.pt"
@@ -510,13 +511,45 @@ if __name__ == "__main__":
         kwargs_handlers=[ddp_kwargs] if use_hidden else [],
     )
     if accelerator.is_main_process and enable_wandb:
-        # Initialize wandb
-        wandb.init(
-            # Set project name
-            project=f"LightningDiT",
-            name=train_config['train']['exp_name'],
+        # --- Determine wandb run ID for resume (merge chained jobs into one run) ---
+        wandb_run_id = os.getenv("WANDB_RUN_ID", None)
+        if wandb_run_id is None and train_config['train'].get('resume', False):
+            # Try to load run ID from the latest checkpoint
+            _exp_dir = os.path.join(train_config['train']['output_dir'], train_config['train']['exp_name'])
+            _ckpt_dir = os.path.join(_exp_dir, 'checkpoints')
+            _last_ckpt = os.path.join(_ckpt_dir, 'last.pt')
+            _ckpt_to_probe = None
+            if os.path.exists(_last_ckpt):
+                _ckpt_to_probe = _last_ckpt
+            else:
+                _numeric = sorted(glob(f"{_ckpt_dir}/[0-9]*.pt"))
+                if _numeric:
+                    _ckpt_to_probe = _numeric[-1]
+            if _ckpt_to_probe:
+                try:
+                    _meta = torch.load(_ckpt_to_probe, map_location='cpu')
+                    wandb_run_id = _meta.get('wandb_run_id', None)
+                    if wandb_run_id:
+                        logger.info(f"Resuming wandb run {wandb_run_id} from {_ckpt_to_probe}")
+                    del _meta
+                except Exception:
+                    pass
 
-            # Set hyperparameters
-            config=OmegaConf.to_container(train_config, resolve=True)
+        # --- Collect tags from config and/or env ---
+        wandb_tags = list(train_config.get('wandb', {}).get('tags', []))
+        env_tags = os.getenv("WANDB_TAGS", "")
+        if env_tags:
+            wandb_tags.extend(t.strip() for t in env_tags.split(",") if t.strip())
+
+        wandb.init(
+            project="LightningDiT",
+            name=train_config['train']['exp_name'],
+            config=OmegaConf.to_container(train_config, resolve=True),
+            tags=wandb_tags or None,
+            id=wandb_run_id,             # None → new run, string → resume
+            resume="allow",              # resume if id exists, else create new
         )
+        # Export the (possibly new) run ID so it can be saved in checkpoints
+        os.environ["WANDB_RUN_ID"] = wandb.run.id
+
     do_train(train_config, accelerator)

@@ -1,12 +1,12 @@
-# Experiment 3: HiddenLightningDiT-XL/1 initialized from LightningDiT-XL 400K weights
-# Shared parameters loaded from checkpoint, hidden-specific params initialized fresh
-# load_weights_with_shape_check handles the partial loading automatically
-# Target: 3x L40 (48GB), effective batch size ~255 via gradient accumulation
+# Experiment 2B-H200: Fine-tune standard LightningDiT-B/1 for 400K steps
+# Starting from autoguidance_b 120K checkpoint, standard (non-hidden) training
+# Target: 2x H200 (141GB), batch/gpu=128, NO gradient accumulation
+# Effective batch size: 128 * 2 = 256
 
-ckpt_path: '' # not used for train
+ckpt_path: 'outputs/train/sfd_autoguidance_b/checkpoints/0120000.pt' # for inference
 
 data:
-  data_path: '/scratch/inf0/user/bpogodzi/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
+  data_path: '/dais/fs/scratch/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
   fid_reference_file: 'outputs/ADM_npz/VIRTUAL_imagenet256_labeled.npz'
   image_size: 256
   num_classes: 1000
@@ -20,7 +20,7 @@ vae:
   downsample_ratio: 16
 
 model:
-  model_type: HiddenLightningDiT_XL_1_H8
+  model_type: LightningDiT-B/1
   use_qknorm: true
   use_swiglu: true
   use_rope: true
@@ -35,33 +35,25 @@ model:
   repa_feat_depth: 2
   repa_weight: 0.5
   repa_mode: 'cos_mse'
-  # Hidden token settings
-  use_hidden_tokens: true
-  hidden_weight: 1.0
-  normalize_hidden: true
-  hidden_reg_weight: 0.01
 
 train:
   max_steps: 400000
-  global_batch_size: 252   # 12 * 3 GPUs * 7 accum = 252
-  grad_accum_steps: 7
+  global_batch_size: 256   # 128 * 2 GPUs * 1 accum = 256
+  grad_accum_steps: 1
   global_seed: 0
   output_dir: 'outputs/train'
-  exp_name: 'hidden_xl_from_pretrained'
+  exp_name: 'sfd_b_h200_finetune'
   ckpt: null
   log_every: 10
-  ckpt_every: 40000
+  ckpt_every: 10000
   ckpt_last_every: 1000
   ckpt_keep_every: 20000
   resume: true
-  # Initialize from LightningDiT-XL 400K checkpoint
-  # Shared weights (blocks, embedders, final_layer, etc.) are loaded;
-  # Hidden-specific params (t_embedder_hid, h_embedding, etc.) keep their fresh init
-  weight_init: 'outputs/train/sfd_xl/checkpoints/0400000.pt'
+  weight_init: 'outputs/train/sfd_autoguidance_b/checkpoints/0120000.pt'
 
 optimizer:
-  lr: 0.0002
-  beta2: 0.95
+  lr: 0.0001
+  beta2: 0.999
   max_grad_norm: 1.0
 
 transport:
@@ -88,4 +80,4 @@ sample:
   timestep_shift: 0
 
 wandb:
-  tags: ["hidden_xl", "exp3", "from_pretrained", "XL/1", "H8"]
+  tags: ["hidden_b_h200", "exp2", "finetune", "B/1", "baseline", "h200"]

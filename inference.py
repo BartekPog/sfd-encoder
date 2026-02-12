@@ -327,7 +327,25 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             print_with_prefix(f'Semantic First enabled: {expected_texture_chans} texture + {semantic_chans} semantic = {model_in_channels} total channels')
 
     if mode == "ODE":
-        if use_semantic_first:
+        if use_hidden and use_semantic_first:
+            # Use semantic first ODE sampling with hidden tokens
+            sample_fn = sampler.sample_ode_semantic_first_hidden(
+                sampling_method=train_config['sample']['sampling_method'],
+                num_steps=train_config['sample']['num_sampling_steps'],
+                atol=train_config['sample']['atol'],
+                rtol=train_config['sample']['rtol'],
+                reverse=train_config['sample']['reverse'],
+                timestep_shift=timestep_shift,
+                semfirst_delta_t=semfirst_delta_t,
+                semantic_chans=semantic_chans,
+                num_hidden_tokens=model.num_hidden_tokens,
+                hidden_token_dim=model.hidden_token_dim,
+            )
+            if accelerator.process_index == 0:
+                print_with_prefix(f'Using Semantic First + Hidden ODE sampling with delta_t={semfirst_delta_t}, semantic_chans={semantic_chans}')
+                print_with_prefix(f'Hidden tokens follow semantic schedule: t_hid = t_sem = t.clamp(max=1.0)')
+                print_with_prefix(f'Hidden tokens: {model.num_hidden_tokens}, dim={model.hidden_token_dim}')
+        elif use_semantic_first:
             # Use semantic first ODE sampling
             sample_fn = sampler.sample_ode_semantic_first(
                 sampling_method=train_config['sample']['sampling_method'],

@@ -77,3 +77,6 @@ sample:
   fid_num: 50000
   cfg_interval_start: 0
   timestep_shift: 0
+
+wandb:
+  tags: ["hidden_xl", "exp2", "finetune", "XL/1", "baseline"]

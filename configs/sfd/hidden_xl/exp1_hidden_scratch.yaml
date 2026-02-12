@@ -81,3 +81,6 @@ sample:
   fid_num: 50000
   cfg_interval_start: 0
   timestep_shift: 0
+
+wandb:
+  tags: ["hidden_xl", "exp1", "scratch", "XL/1", "H8"]
