@@ -988,32 +988,16 @@ class Sampler:
         semantic_chans=8,
         num_hidden_tokens=8,
         hidden_token_dim=32,
+        hidden_schedule="semantic",  # "semantic" (synced with semantic) or "linear" (0 to 1 over full trajectory)
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
         semantic-first scheduling.
 
-        Hidden tokens follow the SAME noise schedule as semantic tokens:
-          t_sem = t_hid = t.clamp(max=1.0)
-          t_tex = (t - delta_t).clamp(min=0.0)
-
-        Global time runs over [0, 1 + delta_t].  Three phases:
-          Phase 1: t ∈ [0, delta_t]          → semantic + hidden update, texture frozen
-          Phase 2: t ∈ [delta_t, 1.0]        → all update
-          Phase 3: t ∈ [1.0, 1.0 + delta_t]  → texture only, semantic + hidden frozen
-
-        State is a tuple (x_img, x_hidden) to work with torchdiffeq's tuple ODE.
-
         Args:
-            sampling_method: ODE solver method
-            num_steps: number of integration steps
-            atol, rtol: solver tolerances
-            reverse: not supported
-            timestep_shift: timestep warping parameter
-            semfirst_delta_t: time offset (semantic/hidden lead texture)
-            semantic_chans: number of semantic channels (last channels of x_img)
-            num_hidden_tokens: number of hidden tokens
-            hidden_token_dim: dimension per hidden token
+            hidden_schedule:
+                - "semantic": Hidden tokens sync with semantic tokens (frozen during texture-only phase).
+                - "linear": Hidden tokens evolve linearly from 0 to 1 over the full [0, 1+dt] trajectory.
         """
         t_max = 1.0 + semfirst_delta_t
         texture_chans = None
@@ -1033,7 +1017,11 @@ class Sampler:
             # Compute per-component times
             t_sem = t.clamp(max=1.0)                     # semantic time
             t_tex = (t - semfirst_delta_t).clamp(min=0.0) # texture time (delayed)
-            t_hid = t_sem                                  # hidden = same as semantic
+            
+            if hidden_schedule == "linear":
+                t_hid = t / t_max                        # linear over [0, 1+dt]
+            else:
+                t_hid = t_sem                            # default: same as semantic
 
             # Model expects tuple timestep for semantic first
             t_tuple = (t_tex, t_sem)
@@ -1056,9 +1044,15 @@ class Sampler:
                 B, 1, *[1] * (x_img.dim() - 2))
             img_vel = img_vel * img_mask
 
-            # Hidden velocity: active when t <= 1.0 (same as semantic)
-            hid_mask = (t <= 1.0).view(B, *[1] * (x_hidden.dim() - 1)).float()
-            hidden_vel = hidden_vel * hid_mask
+            # Hidden velocity masking
+            if hidden_schedule == "linear":
+                # Hidden tokens update throughout the entire process [0, 1+dt]
+                # No masking needed (or mask with ones)
+                pass 
+            else:
+                # Default "semantic" schedule: active when t <= 1.0
+                hid_mask = (t <= 1.0).view(B, *[1] * (x_hidden.dim() - 1)).float()
+                hidden_vel = hidden_vel * hid_mask
 
             return (img_vel, hidden_vel)
 

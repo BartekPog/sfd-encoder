@@ -15,7 +15,6 @@ import torch.distributed as dist
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.tensorboard import SummaryWriter
 import torchvision
 # local imports
 from tokenizer.vavae import VA_VAE
@@ -79,7 +78,8 @@ def update_autoguidance_ckpt_path(config, ckpt_iter):
 # sample function
 def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_interval_start=None, timestep_shift=None,
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
-              fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False):
+              fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
+              hidden_schedule=None):
     """
     Run sampling.
     """
@@ -143,6 +143,12 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
     if num_sampling_steps is not None:
         train_config['sample']['num_sampling_steps'] = num_sampling_steps
 
+    # Resolve hidden_schedule: CLI arg > config > default "semantic"
+    if hidden_schedule is None:
+        hidden_schedule = train_config.get('sample', {}).get('hidden_schedule', 'semantic')
+    if accelerator.process_index == 0 and hidden_schedule != 'semantic':
+        print_with_prefix(f'Hidden schedule: {hidden_schedule}')
+
     # Determine effective cfg_scale_sem and cfg_scale_tex
     # If not specified, use cfg_scale
     effective_cfg_sem = cfg_scale_sem if cfg_scale_sem is not None else cfg_scale
@@ -160,6 +166,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += f"-cfgmode{train_config['model']['semfirst_infer_interval_mode']}"
     if train_config['sample'].get('balanced_sampling', False):
         folder_name += "-balanced"
+    if hidden_schedule != "semantic":
+        folder_name += f"-hsched_{hidden_schedule}"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
@@ -215,7 +223,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         downsample_ratio = 16
     latent_size = train_config['data']['image_size'] // downsample_ratio
 
-    checkpoint = torch.load(ckpt_path, map_location=lambda storage, loc: storage)
+    checkpoint = torch.load(ckpt_path, map_location=lambda storage, loc: storage, weights_only=False)
     if "ema" in checkpoint:  # supports checkpoints from train.py
         checkpoint = checkpoint["ema"]
     model.load_state_dict(checkpoint)
@@ -270,7 +278,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             )
 
             # Load autoguidance checkpoint
-            autoguidance_checkpoint = torch.load(autoguidance_ckpt_path, map_location=lambda storage, loc: storage)
+            autoguidance_checkpoint = torch.load(autoguidance_ckpt_path, map_location=lambda storage, loc: storage, weights_only=False)
             if "ema" in autoguidance_checkpoint:
                 autoguidance_checkpoint = autoguidance_checkpoint["ema"]
             autoguidance_model.load_state_dict(autoguidance_checkpoint)
@@ -340,10 +348,11 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 semantic_chans=semantic_chans,
                 num_hidden_tokens=model.num_hidden_tokens,
                 hidden_token_dim=model.hidden_token_dim,
+                hidden_schedule=hidden_schedule,
             )
             if accelerator.process_index == 0:
                 print_with_prefix(f'Using Semantic First + Hidden ODE sampling with delta_t={semfirst_delta_t}, semantic_chans={semantic_chans}')
-                print_with_prefix(f'Hidden tokens follow semantic schedule: t_hid = t_sem = t.clamp(max=1.0)')
+                print_with_prefix(f'Hidden schedule: {hidden_schedule}')
                 print_with_prefix(f'Hidden tokens: {model.num_hidden_tokens}, dim={model.hidden_token_dim}')
         elif use_semantic_first:
             # Use semantic first ODE sampling
@@ -605,9 +614,15 @@ if __name__ == "__main__":
     parser.add_argument('--cfg_scale_tex', nargs='*', type=float, default=None, help='CFG scale for texture (AutoGuidance only, default: use cfg_scale)')
     parser.add_argument('--fid_num', type=int, default=None, help='Number of samples to generate (default: from config)')
     parser.add_argument('--num_sampling_steps', nargs='*', type=int, default=None, help='Number of sampling steps (default: from config)')
-    args = parser.parse_args()
+    parser.add_argument('--hidden_schedule', type=str, default=None,
+                        help='Hidden token schedule: "semantic" (sync with semantic) or "linear" (0→1 over full trajectory)')
+    args, unknown = parser.parse_known_args()
     accelerator = Accelerator()
     train_config = load_config(args.config)
+    # Apply OmegaConf CLI overrides (e.g. ckpt_path=... sample.sampling_method=euler)
+    if unknown:
+        cli_overrides = OmegaConf.from_dotlist(unknown)
+        train_config = OmegaConf.merge(train_config, cli_overrides)
 
     # Initialize wandb
     if accelerator.is_main_process and enable_wandb:
@@ -667,7 +682,8 @@ if __name__ == "__main__":
         fid_num=args.fid_num,
         num_sampling_steps=args.num_sampling_steps,
         model=model,
-        demo_sample_mode=args.demo)
+        demo_sample_mode=args.demo,
+        hidden_schedule=args.hidden_schedule)
 
     if not args.demo and args.calculate_fid:
         # calculate FID

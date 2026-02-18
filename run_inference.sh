@@ -1,4 +1,7 @@
 CONFIG_PATH=$1
+shift  # remaining args are passed through to inference.py (OmegaConf overrides)
+PASSTHROUGH_ARGS="$@"
+
 CFG_SCALE=${CFG_SCALE:-}
 CFG_INTERVAL_START=${CFG_INTERVAL_START:-}
 TIMESTEP_SHIFT=${TIMESTEP_SHIFT:-}
@@ -57,4 +60,4 @@ accelerate launch \
     --mixed_precision $PRECISION \
     inference.py \
     --config $CONFIG_PATH --calculate-fid \
-    $EXTRA_ARGS
+    $EXTRA_ARGS $PASSTHROUGH_ARGS

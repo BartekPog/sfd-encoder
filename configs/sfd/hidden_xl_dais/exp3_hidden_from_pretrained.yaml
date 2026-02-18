@@ -1,0 +1,91 @@
+# Experiment 3: HiddenLightningDiT-XL/1 initialized from LightningDiT-XL 400K weights
+# Shared parameters loaded from checkpoint, hidden-specific params initialized fresh
+# load_weights_with_shape_check handles the partial loading automatically
+# Target: 3x L40 (48GB), effective batch size ~255 via gradient accumulation
+
+ckpt_path: '' # not used for train
+
+data:
+  data_path: '/dais/fs/scratch/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
+  fid_reference_file: 'outputs/ADM_npz/VIRTUAL_imagenet256_labeled.npz'
+  image_size: 256
+  num_classes: 1000
+  num_workers: 8
+  latent_norm: true
+  latent_sv_norm: true
+  latent_multiplier: 1.0
+
+vae:
+  model_name: 'sdvae_f16d32'
+  downsample_ratio: 16
+
+model:
+  model_type: HiddenLightningDiT_XL_1_H8
+  use_qknorm: true
+  use_swiglu: true
+  use_rope: true
+  use_rmsnorm: true
+  wo_shift: false
+  in_chans: 48
+  semantic_chans: 16
+  semfirst_delta_t: 0.3
+  semantic_weight: 2.0
+  use_repa: true
+  repa_dino_version: "dinov2_vitb14_reg"
+  repa_feat_depth: 2
+  repa_weight: 0.5
+  repa_mode: 'cos_mse'
+  # Hidden token settings
+  use_hidden_tokens: true
+  hidden_weight: 1.0
+  normalize_hidden: true
+  hidden_reg_weight: 0.01
+
+train:
+  max_steps: 400000
+  global_batch_size: 256   # 12 * 3 GPUs * 7 accum = 252
+  grad_accum_steps: 1
+  global_seed: 0
+  output_dir: 'outputs/train'
+  exp_name: 'd2_hidden_xl_dais_from_pretrained'
+  ckpt: null
+  log_every: 50
+  ckpt_every: 40000
+  ckpt_last_every: 1000
+  ckpt_keep_every: 20000
+  resume: true
+  # Initialize from LightningDiT-XL 400K checkpoint
+  # Shared weights (blocks, embedders, final_layer, etc.) are loaded;
+  # Hidden-specific params (t_embedder_hid, h_embedding, etc.) keep their fresh init
+  weight_init: 'outputs/train/sfd_xl/checkpoints/0400000.pt'
+
+optimizer:
+  lr: 0.0002
+  beta2: 0.95
+  max_grad_norm: 1.0
+
+transport:
+  path_type: Linear
+  prediction: velocity
+  loss_weight: null
+  sample_eps: null
+  train_eps: null
+  use_cosine_loss: true
+  use_lognorm: true
+
+sample:
+  mode: ODE
+  sampling_method: dopri5
+  atol: 0.000001
+  rtol: 0.001
+  reverse: false
+  likelihood: false
+  num_sampling_steps: 250
+  cfg_scale: 1.0
+  per_proc_batch_size: 4
+  fid_num: 50000
+  cfg_interval_start: 0
+  timestep_shift: 0
+
+wandb:
+  tags: ["hidden_xl", "exp3", "from_pretrained", "XL/1", "H8"]

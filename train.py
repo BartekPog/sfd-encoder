@@ -9,6 +9,11 @@ import torch.backends.cuda
 import torch.backends.cudnn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+
+
+def _dist_initialized():
+    """Return True when a distributed process group is available."""
+    return dist.is_available() and dist.is_initialized()
 try:
     from torch.utils.tensorboard import SummaryWriter
     _TENSORBOARD_IMPORT_ERROR = None
@@ -150,7 +155,9 @@ def do_train(train_config, accelerator):
             logger.info(f"Loaded pretrained model from {train_config['train']['weight_init']}")
     requires_grad(ema, False)
     
-    model = DDP(model.to(device), device_ids=[rank])
+    model = model.to(device)
+    if _dist_initialized():
+        model = DDP(model, device_ids=[rank])
     transport = create_transport(
         train_config['transport']['path_type'],
         train_config['transport']['prediction'],
@@ -221,35 +228,60 @@ def do_train(train_config, accelerator):
             logger.info(f"Validation Dataset contains {len(valid_dataset):,} images {train_config['data']['valid_path']}")
 
     # Prepare models for training:
-    update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
+    update_ema(ema, model.module if hasattr(model, 'module') else model, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
     
     train_config['train']['resume'] = train_config['train']['resume'] if 'resume' in train_config['train'] else False
 
     if train_config['train']['resume']:
-        # check if the checkpoint exists
+        # Build ordered list of candidate checkpoints (prefer last.pt, then newest numeric)
         checkpoint_files = glob(f"{checkpoint_dir}/*.pt")
+        numeric_checkpoints = sorted(
+            [p for p in checkpoint_files
+             if os.path.basename(p).split('.')[0].isdigit()],
+            key=lambda x: int(os.path.basename(x).split('.')[0]),
+            reverse=True,
+        )
+        candidate_checkpoints = []
         last_checkpoint = os.path.join(checkpoint_dir, "last.pt")
-        latest_checkpoint = None
         if os.path.exists(last_checkpoint):
-            latest_checkpoint = last_checkpoint
-        else:
-            numeric_checkpoints = [
-                path for path in checkpoint_files
-                if os.path.basename(path).split('.')[0].isdigit()
-            ]
-            if numeric_checkpoints:
-                numeric_checkpoints.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
-                latest_checkpoint = numeric_checkpoints[-1]
-        if latest_checkpoint is not None:
-            checkpoint = load_checkpoint_trusted(
-                latest_checkpoint,
-                map_location=lambda storage, loc: storage,
-            )
-            model.load_state_dict(checkpoint['model'])
-            # opt.load_state_dict(checkpoint['opt'])
-            ema.load_state_dict(checkpoint['ema'])
+            candidate_checkpoints.append(last_checkpoint)
+        candidate_checkpoints.extend(numeric_checkpoints)
+
+        checkpoint = None
+        latest_checkpoint = None
+        for candidate in candidate_checkpoints:
+            try:
+                checkpoint = load_checkpoint_trusted(
+                    candidate,
+                    map_location=lambda storage, loc: storage,
+                )
+                latest_checkpoint = candidate
+                break
+            except Exception as exc:
+                if accelerator.is_main_process:
+                    logger.warning(
+                        f"Checkpoint {candidate} is corrupted ({exc}), trying next..."
+                    )
+                # Remove the corrupted file so future runs don't hit it again
+                try:
+                    os.remove(candidate)
+                    if accelerator.is_main_process:
+                        logger.warning(f"Deleted corrupted checkpoint: {candidate}")
+                except OSError:
+                    pass
+
+        if checkpoint is not None:
+            state_dict = checkpoint['model']
+            # Strip 'module.' prefix when not using DDP (single-GPU)
+            if not _dist_initialized() and any(k.startswith('module.') for k in state_dict):
+                state_dict = {k.replace('module.', '', 1): v for k, v in state_dict.items()}
+            model.load_state_dict(state_dict)
+            ema_state = checkpoint['ema']
+            if any(k.startswith('module.') for k in ema_state):
+                ema_state = {k.replace('module.', '', 1): v for k, v in ema_state.items()}
+            ema.load_state_dict(ema_state)
             train_steps = checkpoint.get('train_steps')
             if train_steps is None:
                 base = os.path.basename(latest_checkpoint).split('.')[0]
@@ -267,9 +299,14 @@ def do_train(train_config, accelerator):
             train_config['train']['load_ckpt'],
             map_location=lambda storage, loc: storage,
         )
-        model.load_state_dict(checkpoint['model'])
-        # opt.load_state_dict(checkpoint['opt'])
-        ema.load_state_dict(checkpoint['ema'])
+        state_dict = checkpoint['model']
+        if not _dist_initialized() and any(k.startswith('module.') for k in state_dict):
+            state_dict = {k.replace('module.', '', 1): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict)
+        ema_state = checkpoint['ema']
+        if any(k.startswith('module.') for k in ema_state):
+            ema_state = {k.replace('module.', '', 1): v for k, v in ema_state.items()}
+        ema.load_state_dict(ema_state)
         if accelerator.is_main_process:
             logger.info(f"Loading checkpoint: {train_config['train']['load_ckpt']}")
 
@@ -366,7 +403,7 @@ def do_train(train_config, accelerator):
 
             # Only update EMA and count steps when gradients are actually synced
             if accelerator.sync_gradients:
-                update_ema(ema, model.module)
+                update_ema(ema, model.module if hasattr(model, 'module') else model)
 
                 # Log loss values:
                 if 'cos_loss' in loss_dict and 'repa_loss' in loss_dict:
@@ -384,8 +421,11 @@ def do_train(train_config, accelerator):
                     steps_per_sec = log_steps / (end_time - start_time)
                     # Reduce loss history over all processes:
                     avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                    dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                    avg_loss = avg_loss.item() / dist.get_world_size()
+                    if _dist_initialized():
+                        dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                        avg_loss = avg_loss.item() / dist.get_world_size()
+                    else:
+                        avg_loss = avg_loss.item()
                     if accelerator.is_main_process:
                         logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                         if writer is not None:
@@ -420,7 +460,7 @@ def do_train(train_config, accelerator):
                 if save_last or save_keep:
                     if accelerator.is_main_process:
                         checkpoint = {
-                            "model": model.module.state_dict(),
+                            "model": (model.module if hasattr(model, 'module') else model).state_dict(),
                             "ema": ema.state_dict(),
                             "opt": opt.state_dict(),
                             "config": train_config,
@@ -429,21 +469,29 @@ def do_train(train_config, accelerator):
                         }
                         if save_last:
                             last_path = f"{checkpoint_dir}/last.pt"
-                            torch.save(checkpoint, last_path)
+                            tmp_path = last_path + ".tmp"
+                            torch.save(checkpoint, tmp_path)
+                            os.replace(tmp_path, last_path)
                             logger.info(f"Saved checkpoint to {last_path}")
                         if save_keep:
                             checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                            torch.save(checkpoint, checkpoint_path)
+                            tmp_path = checkpoint_path + ".tmp"
+                            torch.save(checkpoint, tmp_path)
+                            os.replace(tmp_path, checkpoint_path)
                             logger.info(f"Saved checkpoint to {checkpoint_path}")
-                    dist.barrier()
+                    if _dist_initialized():
+                        dist.barrier()
 
                 # Evaluate on validation set
                 if save_keep and 'valid_path' in train_config['data']:
                     if accelerator.is_main_process:
                         logger.info(f"Start evaluating at step {train_steps}")
                     val_loss = evaluate(model, valid_loader, device, transport, (0.0, 1.0))
-                    dist.all_reduce(val_loss, op=dist.ReduceOp.SUM)
-                    val_loss = val_loss.item() / dist.get_world_size()
+                    if _dist_initialized():
+                        dist.all_reduce(val_loss, op=dist.ReduceOp.SUM)
+                        val_loss = val_loss.item() / dist.get_world_size()
+                    else:
+                        val_loss = val_loss.item()
                     if accelerator.is_main_process:
                         logger.info(f"Validation Loss: {val_loss:.4f}")
                         if writer is not None:
@@ -556,26 +604,24 @@ if __name__ == "__main__":
         # --- Determine wandb run ID for resume (merge chained jobs into one run) ---
         wandb_run_id = os.getenv("WANDB_RUN_ID", None)
         if wandb_run_id is None and train_config['train'].get('resume', False):
-            # Try to load run ID from the latest checkpoint
+            # Try to load run ID from the latest checkpoint (with fallback)
             _exp_dir = os.path.join(train_config['train']['output_dir'], train_config['train']['exp_name'])
             _ckpt_dir = os.path.join(_exp_dir, 'checkpoints')
             _last_ckpt = os.path.join(_ckpt_dir, 'last.pt')
-            _ckpt_to_probe = None
+            _candidates = []
             if os.path.exists(_last_ckpt):
-                _ckpt_to_probe = _last_ckpt
-            else:
-                _numeric = sorted(glob(f"{_ckpt_dir}/[0-9]*.pt"))
-                if _numeric:
-                    _ckpt_to_probe = _numeric[-1]
-            if _ckpt_to_probe:
+                _candidates.append(_last_ckpt)
+            _candidates.extend(sorted(glob(f"{_ckpt_dir}/[0-9]*.pt"), reverse=True))
+            for _ckpt_to_probe in _candidates:
                 try:
                     _meta = load_checkpoint_trusted(_ckpt_to_probe, map_location='cpu')
                     wandb_run_id = _meta.get('wandb_run_id', None)
                     if wandb_run_id:
-                        logger.info(f"Resuming wandb run {wandb_run_id} from {_ckpt_to_probe}")
+                        print(f"Resuming wandb run {wandb_run_id} from {_ckpt_to_probe}")
                     del _meta
+                    break
                 except Exception:
-                    pass
+                    print(f"Warning: could not read {_ckpt_to_probe} for wandb resume, trying next...")
 
         # --- Collect tags from config and/or env ---
         wandb_tags = list(train_config.get('wandb', {}).get('tags', []))

@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# run_train_slurm_h200.sh — Submit a training job (or chain of jobs) to SLURM
+# run_train_slurm_b200.sh — Submit a training job (or chain of jobs) to SLURM
 #                            on the H200 cluster (DAIS)
 #
 # Usage:
-#   bash run_train_slurm_h200.sh <config_path> [num_chains] [num_gpus]
+#   bash run_train_slurm_b200.sh <config_path> [num_chains] [num_gpus]
 #
 # Arguments:
 #   config_path  — path to YAML config
@@ -16,26 +16,26 @@
 
 set -euo pipefail
 
-CONFIG_PATH=${1:?'Usage: bash run_train_slurm_h200.sh <config_path> [num_chains] [num_gpus]'}
+CONFIG_PATH=${1:?'Usage: bash run_train_slurm_b200.sh <config_path> [num_chains] [num_gpus]'}
 NUM_CHAINS=${2:-6}
 NUM_GPUS=${3:-4}
 
-# ---- SLURM settings (H200 cluster / DAIS) ----
+# ---- SLURM settings (B200 cluster / DAIS) ----
 # No partition flag — uses default
 TIME=${TIME:-"00-06:00:00"}
-GPUS="h200:${NUM_GPUS}"
+GPUS="b200:${NUM_GPUS}"
 MEM="350G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
 DEPENDENCY_TYPE=${DEPENDENCY_TYPE:-afterany}
 
-EXP_NAME=$(basename "${CONFIG_PATH}" .yaml)
+EXP_NAME="b200$(basename "${CONFIG_PATH}" .yaml)"
 
 echo "============================================="
 echo "  Training: ${EXP_NAME}"
 echo "  Config:   ${CONFIG_PATH}"
 echo "  Chains:   ${NUM_CHAINS} x ${TIME}"
-echo "  GPUs:     ${NUM_GPUS} x H200"
+echo "  GPUs:     ${NUM_GPUS} x B200"
 echo "============================================="
 
 PREV_JOB_ID=""
