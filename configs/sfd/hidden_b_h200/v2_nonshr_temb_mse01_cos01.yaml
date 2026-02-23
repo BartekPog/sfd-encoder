@@ -1,0 +1,90 @@
+# V2 Exp 8: H8, NON-shared timestep embedder, shared patch embedder, MSE 0.1 + cosine 0.1
+# Initialized from 400K fine-tuned checkpoint, train for 200K steps
+# Target: 4x H200, batch/gpu=64, NO gradient accumulation
+# Effective batch size: 64 * 4 = 256
+
+ckpt_path: ''
+
+data:
+  data_path: '/dais/fs/scratch/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
+  fid_reference_file: 'outputs/ADM_npz/VIRTUAL_imagenet256_labeled.npz'
+  image_size: 256
+  num_classes: 1000
+  num_workers: 8
+  latent_norm: true
+  latent_sv_norm: true
+  latent_multiplier: 1.0
+
+vae:
+  model_name: 'sdvae_f16d32'
+  downsample_ratio: 16
+
+model:
+  model_type: HiddenLightningDiT_B_1_H8
+  use_qknorm: true
+  use_swiglu: true
+  use_rope: true
+  use_rmsnorm: true
+  wo_shift: false
+  in_chans: 48
+  semantic_chans: 16
+  semfirst_delta_t: 0.3
+  semantic_weight: 2.0
+  use_repa: true
+  repa_dino_version: "dinov2_vitb14_reg"
+  repa_feat_depth: 2
+  repa_weight: 0.5
+  repa_mode: 'cos_mse'
+  share_timestep_embedder: false
+  # Hidden token settings
+  use_hidden_tokens: true
+  hidden_weight: 0.1
+  hidden_cos_weight: 0.1
+  normalize_hidden: true
+  hidden_reg_weight: 0.01
+
+train:
+  max_steps: 200000
+  global_batch_size: 256
+  grad_accum_steps: 1
+  global_seed: 0
+  output_dir: 'outputs/train'
+  exp_name: 'v2_nonshr_temb_mse01_cos01'
+  ckpt: null
+  log_every: 10
+  ckpt_every: 40000
+  ckpt_last_every: 1000
+  ckpt_keep_every: 20000
+  resume: true
+  weight_init: 'outputs/train/sfd_b_h200_finetune/checkpoints/0400000.pt'
+
+optimizer:
+  lr: 0.0001
+  beta2: 0.999
+  max_grad_norm: 1.0
+
+transport:
+  path_type: Linear
+  prediction: velocity
+  loss_weight: null
+  sample_eps: null
+  train_eps: null
+  use_cosine_loss: true
+  use_lognorm: true
+
+sample:
+  mode: ODE
+  sampling_method: dopri5
+  atol: 0.000001
+  rtol: 0.001
+  reverse: false
+  likelihood: false
+  num_sampling_steps: 250
+  cfg_scale: 1.0
+  per_proc_batch_size: 4
+  fid_num: 50000
+  cfg_interval_start: 0
+  timestep_shift: 0
+
+wandb:
+  tags: ["v2", "base", "H8", "mse01_cos01", "nonshr_temb", "h200", "updated-timestep-encoding"]

@@ -23,6 +23,7 @@ class HiddenLightningDiT(LightningDiT):
         num_hidden_tokens: int=8, 
         use_per_token_encoding: bool=True, 
         share_patch_embedder: bool=True,
+        share_timestep_embedder: bool=False,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -30,6 +31,7 @@ class HiddenLightningDiT(LightningDiT):
         assert num_hidden_tokens > 0, "num_hidden_tokens must be greater than 0"
         self.num_hidden_tokens = num_hidden_tokens
         self.use_per_token_encoding = use_per_token_encoding
+        self.share_timestep_embedder = share_timestep_embedder
         
         # Hidden token output dimension (matches what final_layer produces per token)
         self.hidden_token_dim = self.out_channels * (self.patch_size ** 2)
@@ -41,7 +43,8 @@ class HiddenLightningDiT(LightningDiT):
             self.h_embedding = nn.Parameter(torch.randn(1, self.hidden_size))
         self.h_embedding.requires_grad = True
         
-        self.t_embedder_hid = TimestepEmbedder(self.hidden_size)
+        if not share_timestep_embedder:
+            self.t_embedder_hid = TimestepEmbedder(self.hidden_size)
 
         
         # Create positional  embedding for the hidden tokens if we don't use per token encoding
@@ -69,14 +72,15 @@ class HiddenLightningDiT(LightningDiT):
             nn.init.xavier_uniform_(self.x_embedder_hid.weight)
             if self.x_embedder_hid.bias is not None:
                 nn.init.zeros_(self.x_embedder_hid.bias)
-        nn.init.normal_(self.t_embedder_hid.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder_hid.mlp[2].weight, std=0.02)
+        if hasattr(self, 't_embedder_hid'):
+            nn.init.normal_(self.t_embedder_hid.mlp[0].weight, std=0.02)
+            nn.init.normal_(self.t_embedder_hid.mlp[2].weight, std=0.02)
         if self.pos_emb_hid is not None:
             nn.init.normal_(self.pos_emb_hid, std=0.02)
         if self.h_embedding is not None:
             nn.init.normal_(self.h_embedding, std=0.02) 
     
-    def embed_hidden(self, hidden_tokens: Float[Tensor, "B N input_h_dim"]) -> Float[Tensor, "B N hidden_dim"]:
+    def embed_hidden_tokens(self, hidden_tokens: Float[Tensor, "B N input_h_dim"]) -> Float[Tensor, "B N hidden_dim"]:
         if hasattr(self, 'x_embedder_hid'):
             return self.x_embedder_hid(hidden_tokens)  # (B, N, model_dim)
         
@@ -146,7 +150,7 @@ class HiddenLightningDiT(LightningDiT):
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         num_image_tokens = x.shape[1]
 
-        x_hidden_emb = self.embed_hidden(x_hidden)  # (N, num_hidden_tokens, D)
+        x_hidden_emb = self.embed_hidden_tokens(x_hidden)  # (N, num_hidden_tokens, D)
         x_hidden_emb = x_hidden_emb + self.get_h_add_embeddings()
 
         x = torch.cat([x, x_hidden_emb], dim=1)  # (N, T + num_hidden_tokens, D)
@@ -154,21 +158,37 @@ class HiddenLightningDiT(LightningDiT):
         # Wrap RoPE so it only applies to image tokens (first T), not hidden tokens
         hidden_safe_rope = self._make_hidden_safe_rope(num_image_tokens)
 
-        # Build per-sample conditioning: combine both timestep embeddings + class label
-        # Both timestep signals are summed into a single D-dim vector (like t + y in base class).
-        # The model distinguishes image vs hidden tokens via the learnable h_embedding, not via conditioning.
+        # Build per-token conditioning.
+        # Image tokens: c_img = t_main + y
+        # Hidden tokens: c_hid = t_hid_emb + y
+        # Each group sees only its own timestep; the class label y is shared.
         if self.use_semantic_first:
             t_tex, t_sem = t
             t_emb_sem = self.t_embedder_sem(t_sem)  # (N, D // 2)
             t_emb_tex = self.t_embedder_tex(t_tex)  # (N, D // 2)
             t_main = torch.cat([t_emb_sem, t_emb_tex], dim=1)  # (N, D)
+
+            if self.share_timestep_embedder:
+                t_hid_emb_1 = self.t_embedder_sem(t_hidden)
+                t_hid_emb_2 = self.t_embedder_tex(t_hidden)
+                t_hid_emb = torch.cat([t_hid_emb_1, t_hid_emb_2], dim=1)  # (N, D)
         else:
             t_main = self.t_embedder(t)  # (N, D)
+            if self.share_timestep_embedder:
+                t_hid_emb = self.t_embedder(t_hidden)  # (N, D)
 
-        t_hid_emb = self.t_embedder_hid(t_hidden)  # (N, D)
-        y = self.y_embedder(y, self.training)        # (N, D)
-        c = t_main + t_hid_emb + y                   # (N, D)
-        c = c.unsqueeze(1)                            # (N, 1, D) broadcasted in blocks
+        if not self.share_timestep_embedder:
+            t_hid_emb = self.t_embedder_hid(t_hidden)  # (N, D)
+
+        y = self.y_embedder(y, self.training)  # (N, D)
+
+        # Per-token conditioning: image tokens get their own timestep, hidden tokens get theirs.
+        # Both groups share the class label y.
+        # c shape (N, T_img + N_hid, D) — adaLN modulation is element-wise, so broadcasting
+        # with the existing (N, 1, D) interface is equivalent; per-token c just breaks the sum.
+        c_img = (t_main + y).unsqueeze(1).expand(-1, num_image_tokens, -1)           # (N, T_img, D)
+        c_hid = (t_hid_emb + y).unsqueeze(1).expand(-1, self.num_hidden_tokens, -1)  # (N, N_hid, D)
+        c = torch.cat([c_img, c_hid], dim=1)                                          # (N, T_img+N_hid, D)
 
         for idx, block in enumerate(self.blocks):
             if use_checkpoint:

@@ -117,6 +117,9 @@ def do_train(train_config, accelerator):
         downsample_ratio = 16
     assert train_config['data']['image_size'] % downsample_ratio == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = train_config['data']['image_size'] // downsample_ratio
+    _hidden_kwargs = {}
+    if 'share_timestep_embedder' in train_config['model']:
+        _hidden_kwargs['share_timestep_embedder'] = train_config['model']['share_timestep_embedder']
     model = gen_models[train_config['model']['model_type']](
         input_size=latent_size,
         class_dropout_prob=train_config['model']['class_dropout_prob'] if 'class_dropout_prob' in train_config['model'] else 0.1,
@@ -133,7 +136,8 @@ def do_train(train_config, accelerator):
         repa_depth=train_config['model']['repa_feat_depth'] if 'repa_feat_depth' in train_config['model'] else None,
         semantic_chans=train_config['model']['semantic_chans'] if 'semantic_chans' in train_config['model'] else 0,
         semfirst_delta_t=train_config['model']['semfirst_delta_t'] if 'semfirst_delta_t' in train_config['model'] else 0.0,
-        semfirst_infer_interval_mode=train_config['model']['semfirst_infer_interval_mode'] if 'semfirst_infer_interval_mode' in train_config['model'] else 'both'
+        semfirst_infer_interval_mode=train_config['model']['semfirst_infer_interval_mode'] if 'semfirst_infer_interval_mode' in train_config['model'] else 'both',
+        **_hidden_kwargs,
     )
 
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
@@ -352,6 +356,7 @@ def do_train(train_config, accelerator):
                     hidden_weight = train_config['model'].get('hidden_weight', 1.0)
                     normalize_hidden = train_config['model'].get('normalize_hidden', True)
                     hidden_reg_weight = train_config['model'].get('hidden_reg_weight', 0.01)
+                    hidden_cos_weight = train_config['model'].get('hidden_cos_weight', 0.0)
 
                     # backward_fn: called inside training_losses_hidden to backward
                     # Pass 3's loss immediately, freeing its activations before Pass 2
@@ -368,6 +373,7 @@ def do_train(train_config, accelerator):
                         hidden_weight=hidden_weight,
                         normalize_hidden=normalize_hidden,
                         hidden_reg_weight=hidden_reg_weight,
+                        hidden_cos_weight=hidden_cos_weight,
                         backward_fn=_hidden_backward_fn,
                     )
                 else:
@@ -392,6 +398,8 @@ def do_train(train_config, accelerator):
                 if 'hidden_loss' in loss_dict and loss_dict['hidden_loss'].requires_grad:
                     hidden_loss = loss_dict["hidden_loss"].mean()
                     loss = loss + hidden_loss
+                if 'hidden_cos_loss' in loss_dict and loss_dict['hidden_cos_loss'].requires_grad:
+                    loss = loss + loss_dict['hidden_cos_loss'].mean()
                 if 'hidden_reg_loss' in loss_dict:
                     loss = loss + loss_dict["hidden_reg_loss"]
                 accelerator.backward(loss)
@@ -444,6 +452,9 @@ def do_train(train_config, accelerator):
                             if 'hidden_loss' in loss_dict:
                                 wandb_losses['hidden_loss'] = loss_dict["hidden_loss"].mean().item()
                                 wandb_losses['total_loss'] += wandb_losses['hidden_loss']
+                            if 'hidden_cos_loss' in loss_dict:
+                                wandb_losses['hidden_cos_loss'] = loss_dict["hidden_cos_loss"].mean().item()
+                                wandb_losses['total_loss'] += wandb_losses['hidden_cos_loss']
                             if 'hidden_reg_loss' in loss_dict:
                                 wandb_losses['hidden_reg_loss'] = loss_dict["hidden_reg_loss"].item()
                                 wandb_losses['total_loss'] += wandb_losses['hidden_reg_loss']

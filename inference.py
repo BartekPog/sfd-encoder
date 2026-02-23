@@ -79,7 +79,7 @@ def update_autoguidance_ckpt_path(config, ckpt_iter):
 def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_interval_start=None, timestep_shift=None,
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
               fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
-              hidden_schedule=None):
+              hidden_schedule=None, two_pass=False):
     """
     Run sampling.
     """
@@ -168,6 +168,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += "-balanced"
     if hidden_schedule != "semantic":
         folder_name += f"-hsched_{hidden_schedule}"
+    if two_pass:
+        folder_name += "-twopass"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
@@ -258,6 +260,9 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             autoguidance_ckpt_path = autoguidance_config['ckpt_path']
 
             # Create autoguidance model with same latent size
+            _ag_hidden_kwargs = {}
+            if 'share_timestep_embedder' in autoguidance_config['model']:
+                _ag_hidden_kwargs['share_timestep_embedder'] = autoguidance_config['model']['share_timestep_embedder']
             autoguidance_model = gen_models[autoguidance_config['model']['model_type']](
                 input_size=latent_size,
                 class_dropout_prob=autoguidance_config['model']['class_dropout_prob'] if 'class_dropout_prob' in autoguidance_config['model'] else 0.1,
@@ -274,7 +279,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 repa_depth=autoguidance_config['model']['repa_feat_depth'] if 'repa_feat_depth' in autoguidance_config['model'] else None,
                 semantic_chans=autoguidance_config['model']['semantic_chans'] if 'semantic_chans' in autoguidance_config['model'] else 0,
                 semfirst_delta_t=autoguidance_config['model']['semfirst_delta_t'] if 'semfirst_delta_t' in autoguidance_config['model'] else 0.0,
-                semfirst_infer_interval_mode=autoguidance_config['model']['semfirst_infer_interval_mode'] if 'semfirst_infer_interval_mode' in autoguidance_config['model'] else 'both'
+                semfirst_infer_interval_mode=autoguidance_config['model']['semfirst_infer_interval_mode'] if 'semfirst_infer_interval_mode' in autoguidance_config['model'] else 'both',
+                **_ag_hidden_kwargs,
             )
 
             # Load autoguidance checkpoint
@@ -381,6 +387,32 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             )
     else:
         raise NotImplementedError(f"Sampling mode {mode} is not supported.")
+
+    # Two-pass mode: create separate sample functions for pass 1 (linear) and pass 2 (fixed)
+    sample_fn_pass1 = None
+    sample_fn_pass2 = None
+    if two_pass:
+        assert use_hidden and use_semantic_first, "Two-pass requires hidden tokens and semantic-first mode"
+        common_ode_kwargs = dict(
+            sampling_method=train_config['sample']['sampling_method'],
+            num_steps=train_config['sample']['num_sampling_steps'],
+            atol=train_config['sample']['atol'],
+            rtol=train_config['sample']['rtol'],
+            reverse=train_config['sample']['reverse'],
+            timestep_shift=timestep_shift,
+            semfirst_delta_t=semfirst_delta_t,
+            semantic_chans=semantic_chans,
+            num_hidden_tokens=model.num_hidden_tokens,
+            hidden_token_dim=model.hidden_token_dim,
+        )
+        sample_fn_pass1 = sampler.sample_ode_semantic_first_hidden(
+            **common_ode_kwargs, hidden_schedule="linear",
+        )
+        sample_fn_pass2 = sampler.sample_ode_semantic_first_hidden(
+            **common_ode_kwargs, hidden_schedule="fixed",
+        )
+        if accelerator.process_index == 0:
+            print_with_prefix('Two-pass mode: pass1=linear, pass2=fixed')
 
     if vae is None:
         vae = VA_VAE(
@@ -565,7 +597,12 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 model_kwargs = dict(y=y)
                 model_fn = model.forward
 
-            samples = sample_fn(z, model_fn, **model_kwargs)[-1]
+            if two_pass:
+                result_pass1 = sample_fn_pass1(z, model_fn, _return_hidden=True, **model_kwargs)
+                h_clean = result_pass1[1]
+                samples = sample_fn_pass2(z, model_fn, _z_hidden=h_clean, **model_kwargs)[-1]
+            else:
+                samples = sample_fn(z, model_fn, **model_kwargs)[-1]
             if using_cfg and autoguidance_model is None:
                 samples, _ = samples.chunk(2, dim=0)  # Remove null class samples (only for standard CFG)
             samples = drop_semantic_chansels(train_config, samples)
@@ -615,7 +652,9 @@ if __name__ == "__main__":
     parser.add_argument('--fid_num', type=int, default=None, help='Number of samples to generate (default: from config)')
     parser.add_argument('--num_sampling_steps', nargs='*', type=int, default=None, help='Number of sampling steps (default: from config)')
     parser.add_argument('--hidden_schedule', type=str, default=None,
-                        help='Hidden token schedule: "semantic" (sync with semantic) or "linear" (0→1 over full trajectory)')
+                        help='Hidden token schedule: "semantic", "linear", "fixed", or "linear_from"')
+    parser.add_argument('--two_pass', action='store_true', default=False,
+                        help='Two-pass inference: pass1 generates hidden tokens (linear), pass2 generates image (fixed hidden)')
     args, unknown = parser.parse_known_args()
     accelerator = Accelerator()
     train_config = load_config(args.config)
@@ -648,6 +687,9 @@ if __name__ == "__main__":
         latent_size = train_config['data']['image_size'] // 16
 
     # get model
+    _hidden_kwargs = {}
+    if 'share_timestep_embedder' in train_config['model']:
+        _hidden_kwargs['share_timestep_embedder'] = train_config['model']['share_timestep_embedder']
     model = gen_models[train_config['model']['model_type']](
         input_size=latent_size,
         class_dropout_prob=train_config['model']['class_dropout_prob'] if 'class_dropout_prob' in train_config['model'] else 0.1,
@@ -664,7 +706,8 @@ if __name__ == "__main__":
         repa_depth=train_config['model']['repa_feat_depth'] if 'repa_feat_depth' in train_config['model'] else None,
         semantic_chans=train_config['model']['semantic_chans'] if 'semantic_chans' in train_config['model'] else 0,
         semfirst_delta_t=train_config['model']['semfirst_delta_t'] if 'semfirst_delta_t' in train_config['model'] else 0.0,
-        semfirst_infer_interval_mode=train_config['model']['semfirst_infer_interval_mode'] if 'semfirst_infer_interval_mode' in train_config['model'] else 'both'
+        semfirst_infer_interval_mode=train_config['model']['semfirst_infer_interval_mode'] if 'semfirst_infer_interval_mode' in train_config['model'] else 'both',
+        **_hidden_kwargs,
     )
 
     # naive sample
@@ -683,7 +726,8 @@ if __name__ == "__main__":
         num_sampling_steps=args.num_sampling_steps,
         model=model,
         demo_sample_mode=args.demo,
-        hidden_schedule=args.hidden_schedule)
+        hidden_schedule=args.hidden_schedule,
+        two_pass=args.two_pass)
 
     if not args.demo and args.calculate_fid:
         # calculate FID

@@ -23,45 +23,45 @@ echo "  Chains per experiment: ${NUM_CHAINS}"
 echo "============================================="
 echo ""
 
-# # Experiment 1B: Hidden from scratch (2x H200)
-# echo ">>> Experiment 1B: Hidden from scratch (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp1_hidden_scratch.yaml "${NUM_CHAINS}" 2
-# echo ""
+# Experiment 1B: Hidden from scratch (2x H200)
+echo ">>> Experiment 1B: Hidden from scratch (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp1_hidden_scratch.yaml "${NUM_CHAINS}" 2
+echo ""
 
 # # Experiment 2B: Standard fine-tune (1x H200)
 # echo ">>> Experiment 2B: Standard fine-tune (1x H200)"
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp2_standard_finetune.yaml "${NUM_CHAINS}" 1
 # echo ""
 
-# # Experiment 3B: Hidden from pretrained (2x H200)
-# echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained.yaml "${NUM_CHAINS}" 2
-# echo ""
+# Experiment 3B: Hidden from pretrained (2x H200)
+echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained.yaml "${NUM_CHAINS}" 2
+echo ""
 
-# # Experiment 3B: Hidden from pretrained (2x H200)
-# echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h1.yaml "${NUM_CHAINS}" 2
-# echo ""
+# Experiment 3B: Hidden from pretrained (2x H200)
+echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h1.yaml "${NUM_CHAINS}" 2
+echo ""
 
 # Experiment 3B: Hidden from pretrained (2x H200)
 echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
 bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h16.yaml "${NUM_CHAINS}" 2
 echo ""
 
-# # Experiment 3B: Hidden from pretrained (2x H200)
-# echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_separate_embedder.yaml "${NUM_CHAINS}" 2
-# echo ""
+# Experiment 3B: Hidden from pretrained (2x H200)
+echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_separate_embedder.yaml "${NUM_CHAINS}" 2
+echo ""
 
-# # Experiment 3B: Hidden from pretrained (2x H200)
-# echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml "${NUM_CHAINS}" 2
-# echo ""
+# Experiment 3B: Hidden from pretrained (2x H200)
+echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml "${NUM_CHAINS}" 2
+echo ""
 
-# #Experiment 3B: Hidden from pretrained (2x H200)
-# echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml "${NUM_CHAINS}" 2
-# echo ""
+#Experiment 3B: Hidden from pretrained (2x H200)
+echo ">>> Experiment 3B: Hidden from pretrained (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml "${NUM_CHAINS}" 2
+echo ""
 
 
 

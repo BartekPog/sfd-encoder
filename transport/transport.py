@@ -320,6 +320,7 @@ class Transport:
         hidden_weight=1.0,
         normalize_hidden=True,
         hidden_reg_weight=0.01,
+        hidden_cos_weight=0.0,
         backward_fn=None,
     ):
         """
@@ -347,6 +348,12 @@ class Transport:
                 prevent variance explosion (default True)
             hidden_reg_weight: weight for regularization loss that penalizes hidden
                 token norms deviating from 1. Set to 0 to disable. (default 0.01)
+            hidden_cos_weight: weight for cosine similarity loss between the
+                single-step predicted clean hidden tokens (from Pass 3) and the
+                target clean encodings (from Pass 1). Operates in token space
+                (cosine similarity along hidden_token_dim), making it well-suited
+                when tokens are regularized to lie on the unit sphere.
+                Set to 0 to disable (default 0.0).
             backward_fn: callable(loss) that runs backward on a loss tensor.
                 Should wrap the backward call with model.no_sync() when using DDP
                 to defer gradient synchronization to the main backward call.
@@ -453,14 +460,31 @@ class Transport:
 
         hidden_loss = mean_flat((h_pred3 - ut_h3) ** 2)
 
+        # Single-step prediction of clean hidden tokens from Pass 3:
+        #   x_t = t*x1 + (1-t)*x0  →  x1 = x_t + (1-t)*v_pred
+        # Cosine similarity is computed per-token (along hidden_token_dim),
+        # then averaged over tokens; this is meaningful when tokens lie on the unit sphere.
+        if hidden_cos_weight > 0:
+            h1_pred3 = xt_h3 + (1 - t_h3_expanded) * h_pred3  # (B, num_tokens, dim)
+            hidden_cos_loss = mean_flat(
+                1 - th.nn.functional.cosine_similarity(h1_pred3, h_clean_detached, dim=-1)
+            )  # (B,)
+        else:
+            hidden_cos_loss = None
+
         # If backward_fn provided, backward Pass 3 immediately to free activations
         # before Pass 2's forward. Gradients accumulate on model parameters; they
         # will be synchronized during the main backward call from the training loop.
         if backward_fn is not None:
-            backward_fn(hidden_loss.mean() * hidden_weight)
+            pass3_loss = hidden_loss.mean() * hidden_weight
+            if hidden_cos_loss is not None:
+                pass3_loss = pass3_loss + hidden_cos_loss.mean() * hidden_cos_weight
+            backward_fn(pass3_loss)
             hidden_loss_for_terms = hidden_loss.detach()  # already backward-ed
+            hidden_cos_loss_for_terms = hidden_cos_loss.detach() if hidden_cos_loss is not None else None
         else:
             hidden_loss_for_terms = hidden_loss * hidden_weight
+            hidden_cos_loss_for_terms = hidden_cos_loss * hidden_cos_weight if hidden_cos_loss is not None else None
 
         # ============ PASS 2: Image denoising conditioned on encoding ============
         t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
@@ -496,6 +520,8 @@ class Transport:
         terms['loss'] = img_loss  # image denoising loss (gradient flows through h_clean -> Pass 1)
         terms['pred'] = img_pred
         terms['hidden_loss'] = hidden_loss_for_terms
+        if hidden_cos_loss_for_terms is not None:
+            terms['hidden_cos_loss'] = hidden_cos_loss_for_terms
 
         if self.use_cosine_loss:
             terms['cos_loss'] = mean_flat(1 - th.nn.functional.cosine_similarity(img_pred, ut_img, dim=1))
@@ -988,7 +1014,8 @@ class Sampler:
         semantic_chans=8,
         num_hidden_tokens=8,
         hidden_token_dim=32,
-        hidden_schedule="semantic",  # "semantic" (synced with semantic) or "linear" (0 to 1 over full trajectory)
+        hidden_schedule="semantic",
+        hidden_schedule_start_t=0.0,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -998,6 +1025,11 @@ class Sampler:
             hidden_schedule:
                 - "semantic": Hidden tokens sync with semantic tokens (frozen during texture-only phase).
                 - "linear": Hidden tokens evolve linearly from 0 to 1 over the full [0, 1+dt] trajectory.
+                - "fixed": Hidden tokens are kept fixed (t_hid=1.0, zero velocity). Use with _z_hidden.
+                - "linear_from": Like "linear", but hidden tokens stay frozen at hidden_schedule_start_t
+                  until the linear schedule catches up, then evolve normally.
+            hidden_schedule_start_t: Only used with "linear_from". Hidden tokens are frozen
+                until t_hid would exceed this value.
         """
         t_max = 1.0 + semfirst_delta_t
         texture_chans = None
@@ -1017,11 +1049,18 @@ class Sampler:
             # Compute per-component times
             t_sem = t.clamp(max=1.0)                     # semantic time
             t_tex = (t - semfirst_delta_t).clamp(min=0.0) # texture time (delayed)
-            
-            if hidden_schedule == "linear":
-                t_hid = t / t_max                        # linear over [0, 1+dt]
+
+            if hidden_schedule == "fixed":
+                t_hid = th.ones_like(t)
+            elif hidden_schedule == "linear":
+                t_hid = t / t_max
+            elif hidden_schedule == "linear_from":
+                t_hid_raw = t / t_max
+                t_hid = th.where(t_hid_raw >= hidden_schedule_start_t,
+                                 t_hid_raw,
+                                 th.full_like(t_hid_raw, hidden_schedule_start_t))
             else:
-                t_hid = t_sem                            # default: same as semantic
+                t_hid = t_sem
 
             # Model expects tuple timestep for semantic first
             t_tuple = (t_tex, t_sem)
@@ -1036,21 +1075,23 @@ class Sampler:
 
             # Apply channel masking to image velocity
             img_mask = th.zeros_like(x_img)
-            # Texture channels: active when t >= delta_t
             img_mask[:, :texture_chans, ...] = (t >= semfirst_delta_t).view(
                 B, 1, *[1] * (x_img.dim() - 2))
-            # Semantic channels: active when t <= 1.0
             img_mask[:, -semantic_chans:, ...] = (t <= 1.0).view(
                 B, 1, *[1] * (x_img.dim() - 2))
             img_vel = img_vel * img_mask
 
             # Hidden velocity masking
-            if hidden_schedule == "linear":
-                # Hidden tokens update throughout the entire process [0, 1+dt]
-                # No masking needed (or mask with ones)
-                pass 
+            if hidden_schedule == "fixed":
+                hidden_vel = th.zeros_like(hidden_vel)
+            elif hidden_schedule == "linear":
+                pass  # active throughout
+            elif hidden_schedule == "linear_from":
+                t_hid_raw = t / t_max
+                hid_active = (t_hid_raw >= hidden_schedule_start_t).view(
+                    B, *[1] * (x_hidden.dim() - 1)).float()
+                hidden_vel = hidden_vel * hid_active
             else:
-                # Default "semantic" schedule: active when t <= 1.0
                 hid_mask = (t <= 1.0).view(B, *[1] * (x_hidden.dim() - 1)).float()
                 hidden_vel = hidden_vel * hid_mask
 
@@ -1077,28 +1118,32 @@ class Sampler:
         def _sample_fn(z_img, model_fn, **model_kwargs):
             """
             Sample image + hidden tokens jointly via semantic-first ODE.
-            Automatically creates hidden noise from z_img's device/batch.
 
-            Args:
-                z_img: (B, C, H, W) initial noise for image
-                model_fn: model forward function (model.forward or model.forward_with_cfg)
-            Returns:
-                list with single element: final x_img at t=1+delta_t
-                (matches the return format of sample_ode_semantic_first)
+            Special kwargs (popped before forwarding to model):
+                _z_hidden: (B, num_hidden_tokens, hidden_token_dim) override initial hidden state
+                _return_hidden: if True, return [img_final, h_final] instead of [img_final]
             """
+            _z_hidden = model_kwargs.pop('_z_hidden', None)
+            _return_hidden = model_kwargs.pop('_return_hidden', False)
+
             B = z_img.shape[0]
             device = z_img.device
-            z_hidden = th.randn(B, num_hidden_tokens, hidden_token_dim,
-                                device=device)
+            if _z_hidden is not None:
+                z_hidden = _z_hidden
+            else:
+                z_hidden = th.randn(B, num_hidden_tokens, hidden_token_dim,
+                                    device=device)
             init_state = (z_img, z_hidden)
             samples = _ode.sample(init_state, model_fn, **model_kwargs)
-            # odeint returns (img_trajectory, hidden_trajectory)
-            # each is (num_timepoints, B, ...)
-            # We want the last timepoint for image
             if isinstance(samples, tuple):
                 img_final = samples[0][-1]
+                h_final = samples[1][-1]
             else:
                 img_final = samples[-1]
+                h_final = None
+
+            if _return_hidden:
+                return [img_final, h_final]
             return [img_final]
 
         return _sample_fn
