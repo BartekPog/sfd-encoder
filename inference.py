@@ -748,6 +748,9 @@ if __name__ == "__main__":
                     sp_len = train_config['sample']['fid_num']
                 )
                 print_with_prefix('fid=',fid)
+                # Write FID to file so save_fid_result.py can read it without re-computing
+                with open(os.path.join(sample_folder_dir, "fid_result.txt"), "w") as _fid_f:
+                    _fid_f.write(f"FID: {fid}\n")
                 # Log FID to wandb
                 if enable_wandb:
                     wandb.log({'FID': fid})

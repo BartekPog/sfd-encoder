@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-300000}
+CKPT_STEP=${1:-80000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings ----
@@ -29,12 +29,22 @@ CPUS_PER_TASK=4
 # ---- Hidden-token experiment definitions ----
 # Same set as two-pass / linear-hidden experiments (skip exp2 and H16)
 EXPERIMENTS=(
-    "configs/sfd/hidden_b_h200/exp1_hidden_scratch.yaml|hidden_b_h200_scratch"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained.yaml|hidden_b_h200_from_pretrained"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h1.yaml|hidden_b_h200_from_pretrained_h1"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_separate_embedder.yaml|hidden_b_h200_from_pretrained_separate_embedder"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml|hidden_b_h200_from_pretrained_hidden_pos_encoding"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml|hidden_b_h200_from_pretrained_weak_h_loss"
+    # "configs/sfd/hidden_b_h200/exp1_hidden_scratch.yaml|hidden_b_h200_scratch"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained.yaml|hidden_b_h200_from_pretrained"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h1.yaml|hidden_b_h200_from_pretrained_h1"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_separate_embedder.yaml|hidden_b_h200_from_pretrained_separate_embedder"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml|hidden_b_h200_from_pretrained_hidden_pos_encoding"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml|hidden_b_h200_from_pretrained_weak_h_loss"
+    # ---- V2 experiments ----
+    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
+    "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
+    "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
+    # H16 — longer to train, include when checkpoint is ready
+    "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
 )
 
 echo "============================================="

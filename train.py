@@ -357,6 +357,7 @@ def do_train(train_config, accelerator):
                     normalize_hidden = train_config['model'].get('normalize_hidden', True)
                     hidden_reg_weight = train_config['model'].get('hidden_reg_weight', 0.01)
                     hidden_cos_weight = train_config['model'].get('hidden_cos_weight', 0.0)
+                    hidden_same_t_as_img = train_config['model'].get('hidden_same_t_as_img', False)
 
                     # backward_fn: called inside training_losses_hidden to backward
                     # Pass 3's loss immediately, freeing its activations before Pass 2
@@ -375,6 +376,7 @@ def do_train(train_config, accelerator):
                         hidden_reg_weight=hidden_reg_weight,
                         hidden_cos_weight=hidden_cos_weight,
                         backward_fn=_hidden_backward_fn,
+                        hidden_same_t_as_img=hidden_same_t_as_img,
                     )
                 else:
                     loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)

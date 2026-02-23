@@ -20,17 +20,17 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-300000}
+CKPT_STEP=${1:-80000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- Steps-per-pass configurations ----
 # Each value N means N steps for pass 1 + N steps for pass 2 (2N total)
-STEPS_PER_PASS_LIST=(100 50)
+STEPS_PER_PASS_LIST=(50 100)
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
 TIME=${TIME:-"00-14:00:00"}
 NUM_GPUS=1
-GPUS="h200:${NUM_GPUS}"
+GPUS="b200:${NUM_GPUS}"
 MEM="180G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
@@ -41,21 +41,31 @@ INFERENCE_OUTPUT_DIR="outputs/inference"
 # ---- Hidden-token experiment definitions ----
 # Only include experiments with hidden tokens (skip exp2 standard finetune and H16)
 EXPERIMENTS=(
-    "configs/sfd/hidden_b_h200/exp1_hidden_scratch.yaml|hidden_b_h200_scratch"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained.yaml|hidden_b_h200_from_pretrained"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h1.yaml|hidden_b_h200_from_pretrained_h1"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_separate_embedder.yaml|hidden_b_h200_from_pretrained_separate_embedder"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml|hidden_b_h200_from_pretrained_hidden_pos_encoding"
-    "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml|hidden_b_h200_from_pretrained_weak_h_loss"
+    # "configs/sfd/hidden_b_h200/exp1_hidden_scratch.yaml|hidden_b_h200_scratch"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained.yaml|hidden_b_h200_from_pretrained"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_h1.yaml|hidden_b_h200_from_pretrained_h1"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_separate_embedder.yaml|hidden_b_h200_from_pretrained_separate_embedder"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml|hidden_b_h200_from_pretrained_hidden_pos_encoding"
+    # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml|hidden_b_h200_from_pretrained_weak_h_loss"
+    # ---- V2 experiments ----
+    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
+    "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
+    "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
+    # H16 — longer to train, include when checkpoint is ready
+    # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
 )
 
 echo "============================================="
-echo "  B-size H200 — Two-Pass FID50K Inference"
+echo "  B-size B200 — Two-Pass FID50K Inference"
 echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
 echo "  Sampler: Euler"
 echo "  Steps per pass: ${STEPS_PER_PASS_LIST[*]}"
 echo "  Mode: two-pass (linear → fixed)"
-echo "  GPUs: ${NUM_GPUS} x H200"
+echo "  GPUs: ${NUM_GPUS} x B200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
 echo "============================================="
 echo ""
@@ -114,7 +124,14 @@ GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
     train.exp_name=${INFER_EXP_NAME} \\
     --hidden_schedule linear \\
     --two_pass
-
+python save_fid_result.py \
+    --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \
+    --config     ${CONFIG_PATH} \
+    --ckpt_step  ${CKPT_STEP} \
+    --inference_type twopass \
+    --sampler euler \
+    --num_steps $((STEPS_PER_PASS * 2)) \
+    --steps_per_pass ${STEPS_PER_PASS}
 echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
 SLURM_EOF
 

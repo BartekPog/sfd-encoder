@@ -322,6 +322,7 @@ class Transport:
         hidden_reg_weight=0.01,
         hidden_cos_weight=0.0,
         backward_fn=None,
+        hidden_same_t_as_img=False,
     ):
         """
         Self-encoder training loss with hidden tokens.
@@ -354,6 +355,11 @@ class Transport:
                 (cosine similarity along hidden_token_dim), making it well-suited
                 when tokens are regularized to lie on the unit sphere.
                 Set to 0 to disable (default 0.0).
+            hidden_same_t_as_img: if True, the hidden-token noise level in Pass 3
+                and Pass 2 is set equal to t_img (the image timestep) rather than
+                being sampled independently. This makes training consistent with
+                the "linear" inference hidden schedule where t_hidden = t_img.
+                Default False to preserve backward compatibility.
             backward_fn: callable(loss) that runs backward on a loss tensor.
                 Should wrap the backward call with model.no_sync() when using DDP
                 to defer gradient synchronization to the main backward call.
@@ -438,7 +444,13 @@ class Transport:
         h_clean_detached = h_clean.detach()
         t0_h, t1_h = self.check_interval(self.train_eps, self.sample_eps)
 
-        t_h3 = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+        if hidden_same_t_as_img:
+            # Match the "linear" inference schedule: t_hidden = t_img.
+            # t_img holds the per-sample image timestep (shape B) sampled above;
+            # clamping ensures it stays within [t0_h, t1_h] for numerical safety.
+            t_h3 = t_img.clone().clamp(t0_h, t1_h)
+        else:
+            t_h3 = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
         x0_h3 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
 
         t_h3_expanded = t_h3.view(B, 1, 1)
@@ -487,7 +499,10 @@ class Transport:
             hidden_cos_loss_for_terms = hidden_cos_loss * hidden_cos_weight if hidden_cos_loss is not None else None
 
         # ============ PASS 2: Image denoising conditioned on encoding ============
-        t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+        if hidden_same_t_as_img:
+            t_h = t_img.clone().clamp(t0_h, t1_h)
+        else:
+            t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
         x0_h2 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
 
         # Noise the encoding (gradient flows through h_clean from Pass 1!)
