@@ -1,9 +1,9 @@
-# Experiment 3B-H200: HiddenLightningDiT-B/1 initialized from LightningDiT-B 120K
-# Shared parameters loaded from autoguidance_b checkpoint, hidden-specific params fresh
-# Target: 4x H200 (141GB), batch/gpu=64, NO gradient accumulation
+# V3 Exp 1: Standard LightningDiT-1p0B/1 continued fine-tune (no hidden tokens)
+# Initialized from 4M pretrained 1p0B checkpoint, train for 200K more steps
+# Target: 4x H200, global_batch_size=256
 # Effective batch size: 64 * 4 = 256
 
-ckpt_path: '' # not used for train
+ckpt_path: ''
 
 data:
   data_path: '/dais/fs/scratch/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256'
@@ -20,7 +20,7 @@ vae:
   downsample_ratio: 16
 
 model:
-  model_type: HiddenLightningDiT_B_1_H8_hidden_pos_encoding
+  model_type: LightningDiT-1p0B/1
   use_qknorm: true
   use_swiglu: true
   use_rope: true
@@ -33,29 +33,23 @@ model:
   use_repa: true
   repa_dino_version: "dinov2_vitb14_reg"
   repa_feat_depth: 2
-  repa_weight: 0.5
-  repa_mode: 'cos_mse'
-  # Hidden token settings
-  use_hidden_tokens: true
-  hidden_weight: 1.0
-  normalize_hidden: true
-  hidden_reg_weight: 0.01
+  repa_weight: 1 # 0.5
+  repa_mode: 'cos' # 'cos_mse'
 
 train:
-  max_steps: 400000
-  global_batch_size: 256   # 64 * 4 GPUs * 1 accum = 256
+  max_steps: 200000
+  global_batch_size: 256
   grad_accum_steps: 1
   global_seed: 0
   output_dir: 'outputs/train'
-  exp_name: 'hidden_b_h200_from_pretrained_hidden_pos_encoding'
+  exp_name: 'v3_finetune_no_hidden'
   ckpt: null
   log_every: 10
   ckpt_every: 40000
   ckpt_last_every: 1000
   ckpt_keep_every: 20000
   resume: true
-  # Initialize from LightningDiT-B 120K checkpoint (autoguidance_b)
-  weight_init: 'outputs/train/sfd_autoguidance_b/checkpoints/0120000.pt'
+  weight_init: 'outputs/train/sfd_1p0/checkpoints/4000000.pt'
 
 optimizer:
   lr: 0.0001
@@ -86,8 +80,4 @@ sample:
   timestep_shift: 0
 
 wandb:
-  tags: ["hidden_b_h200", "exp3", "from_pretrained", "B/1", "H8", "hidden_pos_encoding", "h200"]
-
-
-
-scancel  91734 91741 91740 91739 91738 91737 91736 91735
+  tags: ["v3", "1p0B", "no-hidden", "finetune", "h200"]

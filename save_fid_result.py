@@ -71,12 +71,21 @@ def _nested_get(d: dict, dotted_key: str):
     return cur
 
 
-def find_fid_txt(output_dir: Path) -> Path | None:
+def find_fid_txt(output_dir: Path, inference_type: str | None = None,
+                 steps_per_pass: int | None = None,
+                 num_steps: int | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
     (e.g. outputs/inference/{exp_name}/{folder_name}/fid_result.txt),
     so we search recursively under output_dir.
+
+    When *inference_type* is given, filter subdirectories so that twopass
+    results match only folders ending with ``-twopass`` and linear/standard
+    results match only folders that do **not** end with ``-twopass``.
+
+    When *steps_per_pass* (twopass) or *num_steps* (linear) is given, further
+    filter by the step count embedded in the folder name (e.g. ``euler-100-``).
     """
     for candidate in ["fid_result.txt", "fid_results.txt"]:
         # Check directly first (future-proof)
@@ -84,8 +93,25 @@ def find_fid_txt(output_dir: Path) -> Path | None:
             return output_dir / candidate
         # Search one level of subdirectories (the folder_name layer)
         matches = sorted(output_dir.glob(f"*/{candidate}"))
+        if inference_type and matches:
+            if inference_type == "twopass":
+                matches = [m for m in matches if m.parent.name.endswith("-twopass")]
+                # Also filter by steps_per_pass encoded in folder name (e.g. euler-50-)
+                if steps_per_pass and len(matches) > 1:
+                    step_matches = [m for m in matches
+                                    if f"-{steps_per_pass}-" in m.parent.name]
+                    if step_matches:
+                        matches = step_matches
+            else:
+                matches = [m for m in matches if not m.parent.name.endswith("-twopass")]
+                # Filter by num_steps encoded in folder name
+                if num_steps and len(matches) > 1:
+                    step_matches = [m for m in matches
+                                    if f"-{num_steps}-" in m.parent.name]
+                    if step_matches:
+                        matches = step_matches
         if matches:
-            return matches[0]  # there should be exactly one
+            return matches[0]
     return None
 
 
@@ -119,7 +145,10 @@ def main():
     config_path = Path(args.config)
 
     # ---- FID ---- locate the txt written by inference.py (may be in a subfolder)
-    fid_txt = find_fid_txt(output_dir)
+    fid_txt = find_fid_txt(output_dir,
+                           inference_type=args.inference_type,
+                           steps_per_pass=args.steps_per_pass,
+                           num_steps=args.num_steps)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
