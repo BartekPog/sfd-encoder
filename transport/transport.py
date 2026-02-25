@@ -1031,6 +1031,7 @@ class Sampler:
         hidden_token_dim=32,
         hidden_schedule="semantic",
         hidden_schedule_start_t=0.0,
+        hidden_schedule_max_t=1.0,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -1039,12 +1040,18 @@ class Sampler:
         Args:
             hidden_schedule:
                 - "semantic": Hidden tokens sync with semantic tokens (frozen during texture-only phase).
-                - "linear": Hidden tokens evolve linearly from 0 to 1 over the full [0, 1+dt] trajectory.
+                - "linear": Hidden tokens evolve linearly from 0 to hidden_schedule_max_t over the full
+                  [0, 1+dt] trajectory. With hidden_schedule_max_t=1.0 (default) this is equivalent to
+                  full denoising; values < 1.0 leave hidden tokens partially noisy at generation end,
+                  which can be beneficial when the hidden token generator is imperfect.
                 - "fixed": Hidden tokens are kept fixed (t_hid=1.0, zero velocity). Use with _z_hidden.
                 - "linear_from": Like "linear", but hidden tokens stay frozen at hidden_schedule_start_t
                   until the linear schedule catches up, then evolve normally.
             hidden_schedule_start_t: Only used with "linear_from". Hidden tokens are frozen
                 until t_hid would exceed this value.
+            hidden_schedule_max_t: Only used with "linear". Maximum hidden timestep reached at
+                the end of generation (default 1.0 = fully clean). Values in (0, 1) leave hidden
+                tokens partially noisy; the per-step Δt_hid is scaled proportionally.
         """
         t_max = 1.0 + semfirst_delta_t
         texture_chans = None
@@ -1068,7 +1075,10 @@ class Sampler:
             if hidden_schedule == "fixed":
                 t_hid = th.ones_like(t)
             elif hidden_schedule == "linear":
-                t_hid = t / t_max
+                # Scale linearly from 0 to hidden_schedule_max_t over the full trajectory.
+                # With max_t=1.0 (default) hidden tokens are fully denoised at the end;
+                # max_t < 1.0 leaves them partially noisy, reducing each step's Δt_hid.
+                t_hid = (t / t_max) * hidden_schedule_max_t
             elif hidden_schedule == "linear_from":
                 t_hid_raw = t / t_max
                 t_hid = th.where(t_hid_raw >= hidden_schedule_start_t,

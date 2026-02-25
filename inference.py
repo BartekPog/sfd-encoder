@@ -79,7 +79,7 @@ def update_autoguidance_ckpt_path(config, ckpt_iter):
 def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_interval_start=None, timestep_shift=None,
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
               fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
-              hidden_schedule=None, two_pass=False):
+              hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False):
     """
     Run sampling.
     """
@@ -168,6 +168,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += "-balanced"
     if hidden_schedule != "semantic":
         folder_name += f"-hsched_{hidden_schedule}"
+    if hidden_schedule == "linear" and hidden_schedule_max_t != 1.0:
+        folder_name += f"-hmaxt{hidden_schedule_max_t:.2f}"
     if two_pass:
         folder_name += "-twopass"
     # Add autoguidance params to folder name
@@ -355,6 +357,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 num_hidden_tokens=model.num_hidden_tokens,
                 hidden_token_dim=model.hidden_token_dim,
                 hidden_schedule=hidden_schedule,
+                hidden_schedule_max_t=hidden_schedule_max_t,
             )
             if accelerator.process_index == 0:
                 print_with_prefix(f'Using Semantic First + Hidden ODE sampling with delta_t={semfirst_delta_t}, semantic_chans={semantic_chans}')
@@ -407,6 +410,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         )
         sample_fn_pass1 = sampler.sample_ode_semantic_first_hidden(
             **common_ode_kwargs, hidden_schedule="linear",
+            hidden_schedule_max_t=hidden_schedule_max_t,
         )
         sample_fn_pass2 = sampler.sample_ode_semantic_first_hidden(
             **common_ode_kwargs, hidden_schedule="fixed",
@@ -653,6 +657,9 @@ if __name__ == "__main__":
     parser.add_argument('--num_sampling_steps', nargs='*', type=int, default=None, help='Number of sampling steps (default: from config)')
     parser.add_argument('--hidden_schedule', type=str, default=None,
                         help='Hidden token schedule: "semantic", "linear", "fixed", or "linear_from"')
+    parser.add_argument('--hidden_schedule_max_t', type=float, default=1.0,
+                        help='Max hidden timestep for "linear" schedule (default 1.0 = fully clean). '
+                             'Values < 1.0 leave hidden tokens partially noisy at generation end.')
     parser.add_argument('--two_pass', action='store_true', default=False,
                         help='Two-pass inference: pass1 generates hidden tokens (linear), pass2 generates image (fixed hidden)')
     args, unknown = parser.parse_known_args()
@@ -727,6 +734,7 @@ if __name__ == "__main__":
         model=model,
         demo_sample_mode=args.demo,
         hidden_schedule=args.hidden_schedule,
+        hidden_schedule_max_t=args.hidden_schedule_max_t,
         two_pass=args.two_pass)
 
     if not args.demo and args.calculate_fid:

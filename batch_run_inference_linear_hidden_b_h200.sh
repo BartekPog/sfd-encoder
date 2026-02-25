@@ -23,7 +23,7 @@ CKPT_STEP=${1:-80000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
-TIME=${TIME:-"00-14:00:00"}
+TIME=${TIME:-"00-8:00:00"}
 NUM_GPUS=1
 GPUS="h200:${NUM_GPUS}"
 MEM="180G"
@@ -48,16 +48,16 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_hidden_pos_encoding.yaml|hidden_b_h200_from_pretrained_hidden_pos_encoding"
     # "configs/sfd/hidden_b_h200/exp3_hidden_from_pretrained_weak_h_loss.yaml|hidden_b_h200_from_pretrained_weak_h_loss"
     # ---- V2 experiments ----
-    # "configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml|v2_finetune_no_hidden"
+    "configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml|v2_finetune_no_hidden"
     # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
     # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
-    # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
     # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
     # "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
     # "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
     # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
     # H16 — longer to train, include when checkpoint is ready
-    "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+    # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
 )
 
 echo "============================================="

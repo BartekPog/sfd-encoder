@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-10}
+NUM_CHAINS=${1:-5}
 
 echo "============================================="
 echo "  V2 Experiments on H200"

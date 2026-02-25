@@ -73,7 +73,8 @@ def _nested_get(d: dict, dotted_key: str):
 
 def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  steps_per_pass: int | None = None,
-                 num_steps: int | None = None) -> Path | None:
+                 num_steps: int | None = None,
+                 hidden_schedule_max_t: float | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -86,6 +87,11 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
 
     When *steps_per_pass* (twopass) or *num_steps* (linear) is given, further
     filter by the step count embedded in the folder name (e.g. ``euler-100-``).
+
+    When *hidden_schedule_max_t* is given (e.g. 0.60), further filter to
+    folders containing ``hmaxt{value}`` (e.g. ``hmaxt0.60``).  When it is
+    None, only folders that do NOT contain ``hmaxt`` are matched, so that
+    a full-range run (max_t=1.0) is not confused with a partial-range run.
     """
     for candidate in ["fid_result.txt", "fid_results.txt"]:
         # Check directly first (future-proof)
@@ -110,6 +116,17 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                                     if f"-{num_steps}-" in m.parent.name]
                     if step_matches:
                         matches = step_matches
+                # Filter by hidden_schedule_max_t: keep only hmaxt folders when
+                # a specific max_t is requested, or only non-hmaxt folders otherwise.
+                if hidden_schedule_max_t is not None:
+                    tag = f"hmaxt{hidden_schedule_max_t:.2f}"
+                    hmaxt_matches = [m for m in matches if tag in m.parent.name]
+                    if hmaxt_matches:
+                        matches = hmaxt_matches
+                else:
+                    no_hmaxt = [m for m in matches if "hmaxt" not in m.parent.name]
+                    if no_hmaxt:
+                        matches = no_hmaxt
         if matches:
             return matches[0]
     return None
@@ -139,6 +156,9 @@ def main():
                         help="Total number of ODE steps (for twopass: steps per pass)")
     parser.add_argument("--steps_per_pass", type=int, default=None,
                         help="Steps per pass for two-pass inference (None for linear/standard)")
+    parser.add_argument("--hidden_schedule_max_t", type=float, default=None,
+                        help="Max timestep for hidden schedule (e.g. 0.60). "
+                             "Omit for full-range runs (max_t=1.0).")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -148,7 +168,8 @@ def main():
     fid_txt = find_fid_txt(output_dir,
                            inference_type=args.inference_type,
                            steps_per_pass=args.steps_per_pass,
-                           num_steps=args.num_steps)
+                           num_steps=args.num_steps,
+                           hidden_schedule_max_t=args.hidden_schedule_max_t)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -164,16 +185,17 @@ def main():
         cfg = yaml.safe_load(f)
 
     result = {
-        "exp_name":       output_dir.name,       # e.g. v2_mse01_cos01_0080000
-        "sample_dir":     json_dir.name,          # e.g. hiddenlightningdit-b-1-h8-ckpt-...
-        "config":         str(config_path),
-        "ckpt_step":      args.ckpt_step,
-        "inference_type": args.inference_type,
-        "sampler":        args.sampler,
-        "num_steps":      args.num_steps,
-        "steps_per_pass": args.steps_per_pass,
-        "fid50k":         fid,
-        "timestamp":      datetime.now().isoformat(timespec="seconds"),
+        "exp_name":               output_dir.name,
+        "sample_dir":             json_dir.name,
+        "config":                 str(config_path),
+        "ckpt_step":              args.ckpt_step,
+        "inference_type":         args.inference_type,
+        "sampler":                args.sampler,
+        "num_steps":              args.num_steps,
+        "steps_per_pass":         args.steps_per_pass,
+        "hidden_schedule_max_t":  args.hidden_schedule_max_t,
+        "fid50k":                 fid,
+        "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }
 
     for cfg_key, (out_key, default) in CONFIG_FIELDS.items():

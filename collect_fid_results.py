@@ -24,6 +24,7 @@ COLUMN_ORDER = [
     "num_steps",
     "steps_per_pass",
     "sampler",
+    "hidden_schedule_max_t",
     # architecture
     "model_type",
     "use_hidden_tokens",

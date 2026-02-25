@@ -54,7 +54,7 @@ train:
   log_every: 10
   ckpt_every: 40000
   ckpt_last_every: 1000
-  ckpt_keep_every: 20000
+  ckpt_keep_every: 10000
   resume: true
   weight_init: 'outputs/train/sfd_1p0/checkpoints/4000000.pt'
 
