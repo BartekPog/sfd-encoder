@@ -22,9 +22,11 @@ NUM_GPUS=${3:-4}
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
 # No partition flag — uses default
+# Must be 1/8 of node's resources per gpu: mem <= 250000 MB, cores <= 12
+
 TIME=${TIME:-"00-06:00:00"}
 GPUS="h200:${NUM_GPUS}"
-MEM="350G"
+MEM=$((250000 * NUM_GPUS))  # 250 GB per GPU
 CPUS_PER_TASK=4
 PRECISION="bf16"
 DEPENDENCY_TYPE=${DEPENDENCY_TYPE:-afterany}

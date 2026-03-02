@@ -1,0 +1,143 @@
+#!/bin/bash
+# =============================================================================
+# batch_run_inference_twopass_b_h200_sphereclamp.sh
+#
+# Same as batch_run_inference_twopass_b_h200.sh, but with
+# --hidden_sphere_clamp enabled on pass 1 (the linear hidden-token pass).
+# Pass 2 uses fixed (clean) hidden tokens, so sphere-clamping has no effect
+# there and is not passed.
+#
+# Usage:
+#   bash batch_run_inference_twopass_b_h200_sphereclamp.sh [ckpt_step]
+#
+# Arguments:
+#   ckpt_step  — checkpoint step to evaluate (default: 80000)
+#
+# All experiments use:  Euler sampler, cfg_scale=1.0, FID50K,
+#                       --two_pass --hidden_schedule linear --hidden_sphere_clamp
+# =============================================================================
+
+set -euo pipefail
+
+CKPT_STEP=${1:-80000}
+CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
+
+# ---- Steps-per-pass configurations ----
+STEPS_PER_PASS_LIST=(50 100)
+
+# ---- SLURM settings (H200 cluster / DAIS) ----
+TIME=${TIME:-"00-14:00:00"}
+NUM_GPUS=1
+GPUS="b200:${NUM_GPUS}"
+MEM="180G"
+CPUS_PER_TASK=4
+PRECISION="bf16"
+
+# ---- Inference output directory ----
+INFERENCE_OUTPUT_DIR="outputs/inference"
+
+# ---- Hidden-token experiment definitions ----
+EXPERIMENTS=(
+    # ---- V2 experiments ----
+    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
+    "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
+    "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
+    # H16 — longer to train, include when checkpoint is ready
+    "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+)
+
+echo "============================================="
+echo "  B-size B200 — Two-Pass FID50K Inference + SPHERE CLAMP"
+echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
+echo "  Sampler: Euler"
+echo "  Steps per pass: ${STEPS_PER_PASS_LIST[*]}"
+echo "  Mode: two-pass (linear+sphere-clamp → fixed)"
+echo "  GPUs: ${NUM_GPUS} x B200"
+echo "  Experiments: ${#EXPERIMENTS[@]}"
+echo "============================================="
+echo ""
+
+SUBMITTED=0
+
+for STEPS_PER_PASS in "${STEPS_PER_PASS_LIST[@]}"; do
+TOTAL_STEPS=$((STEPS_PER_PASS * 2))
+echo "--- Steps per pass: ${STEPS_PER_PASS} (${TOTAL_STEPS} total) ---"
+
+for ENTRY in "${EXPERIMENTS[@]}"; do
+    IFS='|' read -r CONFIG_PATH TRAIN_EXP_NAME <<< "${ENTRY}"
+    CKPT_PATH="outputs/train/${TRAIN_EXP_NAME}/checkpoints/${CKPT_NAME}.pt"
+
+    if [ ! -f "${CKPT_PATH}" ]; then
+        echo "  SKIP: ${TRAIN_EXP_NAME} — checkpoint ${CKPT_PATH} not found"
+        continue
+    fi
+
+    INFER_EXP_NAME="${TRAIN_EXP_NAME}_${CKPT_NAME}"
+    EXP_LABEL=$(basename "${CONFIG_PATH}" .yaml)
+    JOBSCRIPT="jobs/infer_2psc${STEPS_PER_PASS}_${EXP_LABEL}_${CKPT_NAME}.sh"
+    OUTPUT="job_outputs/infer_2psc${STEPS_PER_PASS}_${EXP_LABEL}_${CKPT_NAME}.o%J"
+    mkdir -p "$(dirname "${JOBSCRIPT}")"
+    mkdir -p "$(dirname "${OUTPUT}")"
+
+    cat > "${JOBSCRIPT}" <<SLURM_EOF
+#!/bin/bash
+#SBATCH --job-name 2psc${STEPS_PER_PASS}_${EXP_LABEL}
+#SBATCH --output ${OUTPUT}
+#SBATCH --time ${TIME}
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=${NUM_GPUS}
+#SBATCH --cpus-per-task=${CPUS_PER_TASK}
+#SBATCH --mem=${MEM}
+#SBATCH --gres gpu:${GPUS}
+
+echo -n 'date: '; date '+%Y-%m-%d %H:%M:%S'
+echo "Two-pass + sphere-clamp inference (${STEPS_PER_PASS}+${STEPS_PER_PASS}): ${EXP_LABEL} @ step ${CKPT_STEP}"
+
+source ~/.bashrc
+module load python-waterboa ffmpeg cuda/13.0
+source ./.venv-sfd/bin/activate
+
+export TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch
+export HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf
+
+GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
+    bash run_inference.sh ${CONFIG_PATH} \\
+    ckpt_path=${CKPT_PATH} \\
+    sample.sampling_method=euler \\
+    sample.num_sampling_steps=${STEPS_PER_PASS} \\
+    sample.fid_num=50000 \\
+    sample.balanced_sampling=true \\
+    train.output_dir=${INFERENCE_OUTPUT_DIR} \\
+    train.exp_name=${INFER_EXP_NAME} \\
+    --hidden_schedule linear \\
+    --two_pass \\
+    --hidden_sphere_clamp
+python save_fid_result.py \
+    --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \
+    --config     ${CONFIG_PATH} \
+    --ckpt_step  ${CKPT_STEP} \
+    --inference_type twopass \
+    --sampler euler \
+    --num_steps $((STEPS_PER_PASS * 2)) \
+    --steps_per_pass ${STEPS_PER_PASS} \
+    --hidden_sphere_clamp
+echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
+SLURM_EOF
+
+    JOB_ID=$(sbatch --parsable "${JOBSCRIPT}")
+    echo "  ${TRAIN_EXP_NAME} (${STEPS_PER_PASS}+${STEPS_PER_PASS}): submitted job ${JOB_ID}"
+    rm -f "${JOBSCRIPT}"
+    SUBMITTED=$((SUBMITTED + 1))
+done
+echo ""
+done
+
+echo ""
+echo "============================================="
+echo "  Submitted ${SUBMITTED} two-pass + sphere-clamp inference jobs."
+echo "  Monitor with:  squeue -u \$USER"
+echo "============================================="

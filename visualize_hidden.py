@@ -95,6 +95,9 @@ def main():
     parser.add_argument("--num_sampling_steps", type=int, default=100)
     parser.add_argument("--cfg_scale", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--hidden_sphere_clamp", action="store_true", default=False,
+                        help="Project each hidden token's single-step clean prediction onto the unit sphere "
+                             "at every sampling step.")
 
     args, unknown = parser.parse_known_args()
     train_config = OmegaConf.load(args.config)
@@ -195,7 +198,11 @@ def main():
         semantic_chans=semantic_chans,
         num_hidden_tokens=model.num_hidden_tokens,
         hidden_token_dim=model.hidden_token_dim,
+        hidden_sphere_clamp=args.hidden_sphere_clamp,
     )
+
+    if args.hidden_sphere_clamp:
+        print("Hidden sphere clamping: enabled")
 
     # Reference generation uses linear hidden schedule
     sample_fn_ref = sampler.sample_ode_semantic_first_hidden(
@@ -302,7 +309,8 @@ def main():
         col_labels = ["ref"] + [f"seed {j}" for j in range(args.num_noise_seeds)]
         grid_img = make_grid_image(grid_rows, row_labels=row_labels, col_labels=col_labels)
 
-        save_path = os.path.join(output_dir, f"vis_{vis_idx:02d}_class{class_label}.png")
+        suffix = "_sphereclamp" if args.hidden_sphere_clamp else ""
+        save_path = os.path.join(output_dir, f"vis_{vis_idx:02d}_class{class_label}{suffix}.png")
         grid_img.save(save_path)
         print(f"  Saved: {save_path}")
 

@@ -37,7 +37,7 @@ model:
   repa_mode: 'cos_mse'
 
 train:
-  max_steps: 200000
+  max_steps: 2000000
   global_batch_size: 256
   grad_accum_steps: 1
   global_seed: 0

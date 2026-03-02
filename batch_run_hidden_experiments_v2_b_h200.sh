@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-5}
+NUM_CHAINS=${1:-12}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -29,15 +29,15 @@ echo "  Chains per experiment: ${NUM_CHAINS}"
 echo "============================================="
 echo ""
 
-# # 1. Standard fine-tune (no hidden) — 1x H200
-# echo ">>> V2-1: Standard fine-tune, no hidden (1x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml "${NUM_CHAINS}" 1
-# echo ""
+# 1. Standard fine-tune (no hidden) — 1x H200
+echo ">>> V2-1: Standard fine-tune, no hidden (1x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml "${NUM_CHAINS}" 1
+echo ""
 
-# # 2. Base H8, shared t-emb, MSE 0.2
-# echo ">>> V2-2: Base H8, shared t-emb, MSE 0.2 (2x H200)"
-# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_base_mse02.yaml "${NUM_CHAINS}" 2
-# echo ""
+# 2. Base H8, shared t-emb, MSE 0.2
+echo ">>> V2-2: Base H8, shared t-emb, MSE 0.2 (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_base_mse02.yaml "${NUM_CHAINS}" 2
+echo ""
 
 # # 3. Base H16, shared t-emb, MSE 0.2
 # echo ">>> V2-3: Base H16, shared t-emb, MSE 0.2 (2x H200)"
@@ -69,10 +69,10 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml "${NUM_CHAINS}" 2
 # echo ""
 
-# 9. Base H8, shared t-emb, MSE 0.1 + cosine 0.1, same timestep (2x H200)
-echo ">>> V2-9: Same timestep MSE 0.1 + cosine 0.1 (2x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml "${NUM_CHAINS}" 2
-echo ""
+# # 9. Base H8, shared t-emb, MSE 0.1 + cosine 0.1, same timestep (2x H200)
+# echo ">>> V2-9: Same timestep MSE 0.1 + cosine 0.1 (2x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml "${NUM_CHAINS}" 2
+# echo ""
 
 echo "============================================="
 echo "  All V2 experiments submitted!"

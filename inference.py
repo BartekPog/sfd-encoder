@@ -79,7 +79,7 @@ def update_autoguidance_ckpt_path(config, ckpt_iter):
 def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_interval_start=None, timestep_shift=None,
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
               fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
-              hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False):
+              hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False):
     """
     Run sampling.
     """
@@ -170,6 +170,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += f"-hsched_{hidden_schedule}"
     if hidden_schedule == "linear" and hidden_schedule_max_t != 1.0:
         folder_name += f"-hmaxt{hidden_schedule_max_t:.2f}"
+    if hidden_sphere_clamp:
+        folder_name += "-hsphereclamp"
     if two_pass:
         folder_name += "-twopass"
     # Add autoguidance params to folder name
@@ -358,11 +360,14 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 hidden_token_dim=model.hidden_token_dim,
                 hidden_schedule=hidden_schedule,
                 hidden_schedule_max_t=hidden_schedule_max_t,
+                hidden_sphere_clamp=hidden_sphere_clamp,
             )
             if accelerator.process_index == 0:
                 print_with_prefix(f'Using Semantic First + Hidden ODE sampling with delta_t={semfirst_delta_t}, semantic_chans={semantic_chans}')
                 print_with_prefix(f'Hidden schedule: {hidden_schedule}')
                 print_with_prefix(f'Hidden tokens: {model.num_hidden_tokens}, dim={model.hidden_token_dim}')
+                if hidden_sphere_clamp:
+                    print_with_prefix('Hidden sphere clamping: enabled')
         elif use_semantic_first:
             # Use semantic first ODE sampling
             sample_fn = sampler.sample_ode_semantic_first(
@@ -411,6 +416,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         sample_fn_pass1 = sampler.sample_ode_semantic_first_hidden(
             **common_ode_kwargs, hidden_schedule="linear",
             hidden_schedule_max_t=hidden_schedule_max_t,
+            hidden_sphere_clamp=hidden_sphere_clamp,
         )
         sample_fn_pass2 = sampler.sample_ode_semantic_first_hidden(
             **common_ode_kwargs, hidden_schedule="fixed",
@@ -662,6 +668,9 @@ if __name__ == "__main__":
                              'Values < 1.0 leave hidden tokens partially noisy at generation end.')
     parser.add_argument('--two_pass', action='store_true', default=False,
                         help='Two-pass inference: pass1 generates hidden tokens (linear), pass2 generates image (fixed hidden)')
+    parser.add_argument('--hidden_sphere_clamp', action='store_true', default=False,
+                        help='At each hidden-token step, project the single-step clean prediction onto the unit sphere '
+                             'token-wise before computing the velocity. Has no effect when hidden_schedule=fixed.')
     args, unknown = parser.parse_known_args()
     accelerator = Accelerator()
     train_config = load_config(args.config)
@@ -735,7 +744,8 @@ if __name__ == "__main__":
         demo_sample_mode=args.demo,
         hidden_schedule=args.hidden_schedule,
         hidden_schedule_max_t=args.hidden_schedule_max_t,
-        two_pass=args.two_pass)
+        two_pass=args.two_pass,
+        hidden_sphere_clamp=args.hidden_sphere_clamp)
 
     if not args.demo and args.calculate_fid:
         # calculate FID

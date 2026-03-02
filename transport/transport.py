@@ -1032,6 +1032,7 @@ class Sampler:
         hidden_schedule="semantic",
         hidden_schedule_start_t=0.0,
         hidden_schedule_max_t=1.0,
+        hidden_sphere_clamp=False,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -1105,6 +1106,29 @@ class Sampler:
             img_mask[:, -semantic_chans:, ...] = (t <= 1.0).view(
                 B, 1, *[1] * (x_img.dim() - 2))
             img_vel = img_vel * img_mask
+
+            # Sphere-clamping for hidden tokens (before masking).
+            # At each step we recover the single-step clean prediction h_1_pred,
+            # project it onto the unit sphere token-wise, then reconstruct the
+            # velocity so that it points toward the sphere-normalised target while
+            # keeping the noise estimate h_0_pred unchanged.
+            #
+            #   h_1_pred  = h_t + (1-t_hid) * v          (rectified-flow clean pred)
+            #   h_0_pred  = h_t - t_hid     * v           (noise pred)
+            #   h_1_clamp = h_1_pred / ||h_1_pred||_token  (per-token L2 norm)
+            #   v_clamp   = h_1_clamp - h_0_pred
+            #
+            # Applied only when the schedule actively moves hidden tokens; the
+            # subsequent masking will zero-out v_clamp whenever the schedule is
+            # frozen (e.g. linear_from before start_t), so order is safe.
+            if hidden_sphere_clamp and hidden_schedule != "fixed":
+                t_hid_exp = t_hid.view(B, 1, 1)  # (B, 1, 1) broadcast over (tokens, dim)
+                h_clean_pred = x_hidden + (1.0 - t_hid_exp) * hidden_vel
+                h_noise_pred = x_hidden - t_hid_exp * hidden_vel
+                # Token-wise L2 norm; clamp to avoid division by zero
+                h_norms = h_clean_pred.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                h_clean_clamped = h_clean_pred / h_norms
+                hidden_vel = h_clean_clamped - h_noise_pred
 
             # Hidden velocity masking
             if hidden_schedule == "fixed":

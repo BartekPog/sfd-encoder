@@ -44,7 +44,7 @@ model:
   hidden_reg_weight: 0.01
 
 train:
-  max_steps: 200000
+  max_steps: 600000
   global_batch_size: 256
   grad_accum_steps: 1
   global_seed: 0

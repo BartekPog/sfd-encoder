@@ -74,7 +74,8 @@ def _nested_get(d: dict, dotted_key: str):
 def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  steps_per_pass: int | None = None,
                  num_steps: int | None = None,
-                 hidden_schedule_max_t: float | None = None) -> Path | None:
+                 hidden_schedule_max_t: float | None = None,
+                 hidden_sphere_clamp: bool = False) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -92,6 +93,9 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
     folders containing ``hmaxt{value}`` (e.g. ``hmaxt0.60``).  When it is
     None, only folders that do NOT contain ``hmaxt`` are matched, so that
     a full-range run (max_t=1.0) is not confused with a partial-range run.
+
+    When *hidden_sphere_clamp* is True, further filter to folders containing
+    ``hsphereclamp``; when False, exclude those folders.
     """
     for candidate in ["fid_result.txt", "fid_results.txt"]:
         # Check directly first (future-proof)
@@ -127,6 +131,16 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     no_hmaxt = [m for m in matches if "hmaxt" not in m.parent.name]
                     if no_hmaxt:
                         matches = no_hmaxt
+                # Filter by hidden_sphere_clamp: keep only hsphereclamp folders when
+                # the flag is set, or only non-hsphereclamp folders otherwise.
+                if hidden_sphere_clamp:
+                    sc_matches = [m for m in matches if "hsphereclamp" in m.parent.name]
+                    if sc_matches:
+                        matches = sc_matches
+                else:
+                    no_sc = [m for m in matches if "hsphereclamp" not in m.parent.name]
+                    if no_sc:
+                        matches = no_sc
         if matches:
             return matches[0]
     return None
@@ -159,6 +173,8 @@ def main():
     parser.add_argument("--hidden_schedule_max_t", type=float, default=None,
                         help="Max timestep for hidden schedule (e.g. 0.60). "
                              "Omit for full-range runs (max_t=1.0).")
+    parser.add_argument("--hidden_sphere_clamp", action="store_true", default=False,
+                        help="Set if inference was run with --hidden_sphere_clamp.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -169,7 +185,8 @@ def main():
                            inference_type=args.inference_type,
                            steps_per_pass=args.steps_per_pass,
                            num_steps=args.num_steps,
-                           hidden_schedule_max_t=args.hidden_schedule_max_t)
+                           hidden_schedule_max_t=args.hidden_schedule_max_t,
+                           hidden_sphere_clamp=args.hidden_sphere_clamp)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -194,6 +211,7 @@ def main():
         "num_steps":              args.num_steps,
         "steps_per_pass":         args.steps_per_pass,
         "hidden_schedule_max_t":  args.hidden_schedule_max_t,
+        "hidden_sphere_clamp":    args.hidden_sphere_clamp,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }
