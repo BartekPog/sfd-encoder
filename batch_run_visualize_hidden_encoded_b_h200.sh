@@ -1,13 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# batch_run_visualize_hidden_b_h200_sphereclamp.sh
+# batch_run_visualize_hidden_encoded_b_h200.sh
 #
-# Same as batch_run_visualize_hidden_b_h200.sh, but with --hidden_sphere_clamp
-# enabled.  Output filenames get a "_sphereclamp" suffix so they never
-# overwrite the plain-generation visualisations from the base script.
+# Visualize hidden token encodings from *real images* with sphere clamp.
+#
+# For each visualisation a real dataset image is encoded to obtain h_clean,
+# then images are generated from varying hidden-noise levels (rows) and
+# image-noise seeds (columns).  The original real image is shown in an
+# extra column on the left.
 #
 # Usage:
-#   bash batch_run_visualize_hidden_b_h200_sphereclamp.sh [ckpt_step]
+#   bash batch_run_visualize_hidden_encoded_b_h200.sh [ckpt_step]
 #
 # Arguments:
 #   ckpt_step  — checkpoint step to evaluate (default: 80000)
@@ -15,7 +18,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-400000}
+CKPT_STEP=${1:-200000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings ----
@@ -28,22 +31,27 @@ CPUS_PER_TASK=4
 # ---- Hidden-token experiment definitions ----
 EXPERIMENTS=(
     # ---- V2 experiments ----
-    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
     # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
     # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
     # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
     # "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
     # "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
     # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
-    # # H16 — longer to train, include when checkpoint is ready
+    # # H16
     # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+    "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
+    "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
 )
 
 echo "============================================="
-echo "  B-size H200 — Hidden Token Visualisation + SPHERE CLAMP"
+echo "  B-size H200 — Hidden Token Encoded Visualisation + SPHERE CLAMP"
 echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
 echo "  5 visualisations per model, 5 noise seeds, 6 t_inith levels"
-echo "  Outputs: outputs/visualizations/<exp>_<step>/vis_XX_classYYY_sphereclamp.png"
+echo "  Mode: encode real image → noisy h → generate (with original shown)"
+echo "  Outputs: outputs/visualizations/<exp>_<step>/vis_enc_XX_classYYY_sphereclamp.png"
 echo "  GPUs: ${NUM_GPUS} x H200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
 echo "============================================="
@@ -61,14 +69,14 @@ for ENTRY in "${EXPERIMENTS[@]}"; do
     fi
 
     EXP_LABEL=$(basename "${CONFIG_PATH}" .yaml)
-    JOBSCRIPT="jobs/viz_hsc_${EXP_LABEL}_${CKPT_NAME}.sh"
-    OUTPUT="job_outputs/viz_hsc_${EXP_LABEL}_${CKPT_NAME}.o%J"
+    JOBSCRIPT="jobs/viz_enc_${EXP_LABEL}_${CKPT_NAME}.sh"
+    OUTPUT="job_outputs/viz_enc_${EXP_LABEL}_${CKPT_NAME}.o%J"
     mkdir -p "$(dirname "${JOBSCRIPT}")"
     mkdir -p "$(dirname "${OUTPUT}")"
 
     cat > "${JOBSCRIPT}" <<SLURM_EOF
 #!/bin/bash
-#SBATCH --job-name vhsc_${EXP_LABEL}
+#SBATCH --job-name venc_${EXP_LABEL}
 #SBATCH --output ${OUTPUT}
 #SBATCH --time ${TIME}
 #SBATCH --nodes=1
@@ -78,7 +86,7 @@ for ENTRY in "${EXPERIMENTS[@]}"; do
 #SBATCH --gres gpu:${GPUS}
 
 echo -n 'date: '; date '+%Y-%m-%d %H:%M:%S'
-echo "Hidden token visualisation (sphere clamp): ${EXP_LABEL} @ step ${CKPT_STEP}"
+echo "Hidden token encoded visualisation (sphere clamp): ${EXP_LABEL} @ step ${CKPT_STEP}"
 
 source ~/.bashrc
 module load python-waterboa ffmpeg cuda/13.0
@@ -87,7 +95,7 @@ source ./.venv-sfd/bin/activate
 export TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch
 export HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf
 
-python visualize_hidden.py \\
+python visualize_hidden_encoded.py \\
     --config ${CONFIG_PATH} \\
     --ckpt_path ${CKPT_PATH} \\
     --num_vis 5 \\
@@ -110,6 +118,6 @@ done
 
 echo ""
 echo "============================================="
-echo "  Submitted ${SUBMITTED} visualisation jobs (sphere clamp)."
+echo "  Submitted ${SUBMITTED} encoded visualisation jobs (sphere clamp)."
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="

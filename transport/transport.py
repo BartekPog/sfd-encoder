@@ -1048,8 +1048,12 @@ class Sampler:
                 - "fixed": Hidden tokens are kept fixed (t_hid=1.0, zero velocity). Use with _z_hidden.
                 - "linear_from": Like "linear", but hidden tokens stay frozen at hidden_schedule_start_t
                   until the linear schedule catches up, then evolve normally.
-            hidden_schedule_start_t: Only used with "linear_from". Hidden tokens are frozen
-                until t_hid would exceed this value.
+                - "encode_linear": Hidden tokens start at hidden_schedule_start_t and linearly reach 1.0
+                  by the end. Intended for GT-initialised hidden tokens:
+                  h_init = start_t * h_clean + (1-start_t) * noise, passed via _z_hidden.
+            hidden_schedule_start_t: Used with "linear_from" and "encode_linear". For "linear_from",
+                hidden tokens are frozen until t_hid would exceed this value. For "encode_linear",
+                this is the starting hidden timestep (noise level of the GT-initialised hidden state).
             hidden_schedule_max_t: Only used with "linear". Maximum hidden timestep reached at
                 the end of generation (default 1.0 = fully clean). Values in (0, 1) leave hidden
                 tokens partially noisy; the per-step Δt_hid is scaled proportionally.
@@ -1085,6 +1089,9 @@ class Sampler:
                 t_hid = th.where(t_hid_raw >= hidden_schedule_start_t,
                                  t_hid_raw,
                                  th.full_like(t_hid_raw, hidden_schedule_start_t))
+            elif hidden_schedule == "encode_linear":
+                # Compressed linear: t_hid goes from start_t → 1.0 over full trajectory
+                t_hid = hidden_schedule_start_t + (t / t_max) * (1.0 - hidden_schedule_start_t)
             else:
                 t_hid = t_sem
 
@@ -1133,7 +1140,7 @@ class Sampler:
             # Hidden velocity masking
             if hidden_schedule == "fixed":
                 hidden_vel = th.zeros_like(hidden_vel)
-            elif hidden_schedule == "linear":
+            elif hidden_schedule in ("linear", "encode_linear"):
                 pass  # active throughout
             elif hidden_schedule == "linear_from":
                 t_hid_raw = t / t_max

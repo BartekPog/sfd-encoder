@@ -105,15 +105,22 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
         matches = sorted(output_dir.glob(f"*/{candidate}"))
         if inference_type and matches:
             if inference_type == "twopass":
-                matches = [m for m in matches if m.parent.name.endswith("-twopass")]
+                matches = [m for m in matches if "-twopass" in m.parent.name]
                 # Also filter by steps_per_pass encoded in folder name (e.g. euler-50-)
                 if steps_per_pass and len(matches) > 1:
                     step_matches = [m for m in matches
                                     if f"-{steps_per_pass}-" in m.parent.name]
                     if step_matches:
                         matches = step_matches
+            elif inference_type == "encodefirst":
+                matches = [m for m in matches if "-encodefirst" in m.parent.name]
+            elif inference_type == "encodelinear":
+                matches = [m for m in matches if "-enclin" in m.parent.name]
             else:
-                matches = [m for m in matches if not m.parent.name.endswith("-twopass")]
+                matches = [m for m in matches
+                           if not m.parent.name.endswith("-twopass")
+                           and "-encodefirst" not in m.parent.name
+                           and "-enclin" not in m.parent.name]
                 # Filter by num_steps encoded in folder name
                 if num_steps and len(matches) > 1:
                     step_matches = [m for m in matches
@@ -163,7 +170,7 @@ def main():
     parser.add_argument("--ckpt_step",      required=True, type=int,
                         help="Checkpoint step that was evaluated")
     parser.add_argument("--inference_type", required=True,
-                        choices=["linear", "twopass", "standard"],
+                        choices=["linear", "twopass", "standard", "encodefirst", "encodelinear"],
                         help="Inference mode")
     parser.add_argument("--sampler",        default="euler")
     parser.add_argument("--num_steps",      type=int, default=100,
@@ -175,6 +182,8 @@ def main():
                              "Omit for full-range runs (max_t=1.0).")
     parser.add_argument("--hidden_sphere_clamp", action="store_true", default=False,
                         help="Set if inference was run with --hidden_sphere_clamp.")
+    parser.add_argument("--encode_linear_start_t", type=float, default=None,
+                        help="Start timestep for encode-linear mode (e.g. 0.50).")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -212,6 +221,7 @@ def main():
         "steps_per_pass":         args.steps_per_pass,
         "hidden_schedule_max_t":  args.hidden_schedule_max_t,
         "hidden_sphere_clamp":    args.hidden_sphere_clamp,
+        "encode_linear_start_t":  args.encode_linear_start_t,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

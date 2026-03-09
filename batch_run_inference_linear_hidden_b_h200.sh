@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-80000}
+CKPT_STEP=${1:-1700000} 
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -51,7 +51,7 @@ EXPERIMENTS=(
     "configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml|v2_finetune_no_hidden"
     # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
     # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
-    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
     # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
     # "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
     # "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"

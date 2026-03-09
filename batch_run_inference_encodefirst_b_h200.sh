@@ -1,25 +1,27 @@
 #!/bin/bash
 # =============================================================================
-# batch_run_inference_linear_hidden_b_h200_sphereclamp.sh
+# batch_run_inference_encodefirst_b_h200.sh
 #
-# Same as batch_run_inference_linear_hidden_b_h200.sh, but with
-# --hidden_sphere_clamp enabled.  At each hidden-token ODE step the
-# single-step clean prediction is projected onto the unit sphere
-# (per token) before the velocity is computed.
+# Encode-first-pass FID50K inference for B-size H200 hidden-token experiments.
+#
+# Pass 1 (encode): A real dataset image is encoded in a single forward pass
+#   (mirroring training Pass 1) to recover clean hidden tokens h_clean.
+# Pass 2 (generate): Image is generated from random noise with h_clean held
+#   fixed via --encode_first_pass, with optional --hidden_sphere_clamp.
 #
 # Usage:
-#   bash batch_run_inference_linear_hidden_b_h200_sphereclamp.sh [ckpt_step]
+#   bash batch_run_inference_encodefirst_b_h200.sh [ckpt_step]
 #
 # Arguments:
 #   ckpt_step  — checkpoint step to evaluate (default: 80000)
 #
 # All experiments use:  Euler sampler, 100 steps, cfg_scale=1.0, FID50K,
-#                       hidden_schedule=linear, hidden_sphere_clamp=true
+#                       --encode_first_pass --hidden_sphere_clamp
 # =============================================================================
 
 set -euo pipefail
 
-CKPT_STEP=${1:-180000}
+CKPT_STEP=${1:-80000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -37,27 +39,27 @@ INFERENCE_OUTPUT_DIR="outputs/inference"
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
 EXPERIMENTS=(
     # ---- V2 experiments ----
-    # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
-    # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
-    # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
-    # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
-    # "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
-    # "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
-    # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
-    # H16 — longer to train, include when checkpoint is ready
-    # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
+    "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
+    "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
+    "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
+    # H16
+    "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
     # ---- V4 experiments (from v2_finetune_no_hidden/1540000.pt) ----
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
 )
 
 echo "============================================="
-echo "  B-size H200 — FID50K Inference (LINEAR hidden schedule + SPHERE CLAMP)"
+echo "  B-size H200 — FID50K Inference (ENCODE-FIRST + SPHERE CLAMP)"
 echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
 echo "  Sampler: Euler, 100 steps"
-echo "  Hidden schedule: linear + sphere-clamping"
+echo "  Mode: encode real image → fixed hidden → generate"
 echo "  GPUs: ${NUM_GPUS} x H200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
 echo "============================================="
@@ -78,14 +80,14 @@ for ENTRY in "${EXPERIMENTS[@]}"; do
 
     INFER_EXP_NAME="${TRAIN_EXP_NAME}_${EXP_CKPT_NAME}"
     EXP_LABEL=$(basename "${CONFIG_PATH}" .yaml)
-    JOBSCRIPT="jobs/infer_linsc_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
-    OUTPUT="job_outputs/infer_linsc_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
+    JOBSCRIPT="jobs/infer_encf_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
+    OUTPUT="job_outputs/infer_encf_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
     mkdir -p "$(dirname "${JOBSCRIPT}")"
     mkdir -p "$(dirname "${OUTPUT}")"
 
     cat > "${JOBSCRIPT}" <<SLURM_EOF
 #!/bin/bash
-#SBATCH --job-name inlsc_${EXP_LABEL}
+#SBATCH --job-name inencf_${EXP_LABEL}
 #SBATCH --output ${OUTPUT}
 #SBATCH --time ${TIME}
 #SBATCH --nodes=1
@@ -95,7 +97,7 @@ for ENTRY in "${EXPERIMENTS[@]}"; do
 #SBATCH --gres gpu:${GPUS}
 
 echo -n 'date: '; date '+%Y-%m-%d %H:%M:%S'
-echo "Inference (linear hidden + sphere clamp): ${EXP_LABEL} @ step ${EXP_CKPT_STEP}"
+echo "Inference (encode-first + sphere clamp): ${EXP_LABEL} @ step ${EXP_CKPT_STEP}"
 
 source ~/.bashrc
 module load python-waterboa ffmpeg cuda/13.0
@@ -113,13 +115,13 @@ GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
     sample.balanced_sampling=true \\
     train.output_dir=${INFERENCE_OUTPUT_DIR} \\
     train.exp_name=${INFER_EXP_NAME} \\
-    --hidden_schedule linear \\
+    --encode_first_pass \\
     --hidden_sphere_clamp
 python save_fid_result.py \
     --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \
     --config     ${CONFIG_PATH} \
     --ckpt_step  ${EXP_CKPT_STEP} \
-    --inference_type linear \
+    --inference_type encodefirst \
     --sampler euler \
     --num_steps 100 \
     --hidden_sphere_clamp
@@ -134,6 +136,6 @@ done
 
 echo ""
 echo "============================================="
-echo "  Submitted ${SUBMITTED} inference jobs (linear hidden + sphere clamp)."
+echo "  Submitted ${SUBMITTED} encode-first inference jobs."
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="

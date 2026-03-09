@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-12}
+NUM_CHAINS=${1:-4}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -29,15 +29,15 @@ echo "  Chains per experiment: ${NUM_CHAINS}"
 echo "============================================="
 echo ""
 
-# 1. Standard fine-tune (no hidden) — 1x H200
-echo ">>> V2-1: Standard fine-tune, no hidden (1x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml "${NUM_CHAINS}" 1
-echo ""
+# # 1. Standard fine-tune (no hidden) — 1x H200
+# echo ">>> V2-1: Standard fine-tune, no hidden (1x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml "${NUM_CHAINS}" 1
+# echo ""
 
-# 2. Base H8, shared t-emb, MSE 0.2
-echo ">>> V2-2: Base H8, shared t-emb, MSE 0.2 (2x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_base_mse02.yaml "${NUM_CHAINS}" 2
-echo ""
+# # 2. Base H8, shared t-emb, MSE 0.2
+# echo ">>> V2-2: Base H8, shared t-emb, MSE 0.2 (2x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_base_mse02.yaml "${NUM_CHAINS}" 2
+# echo ""
 
 # # 3. Base H16, shared t-emb, MSE 0.2
 # echo ">>> V2-3: Base H16, shared t-emb, MSE 0.2 (2x H200)"
@@ -74,7 +74,24 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml "${NUM_CHAINS}" 2
 # echo ""
 
+# ---- V4: from v2_finetune_no_hidden/1540000.pt ----
+echo ">>> V4-1: Base H8, MSE 0.2 — from ft-1540k (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml "${NUM_CHAINS}" 1
+echo ""
+
+echo ">>> V4-2: Base H16, MSE 0.2 — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml "${NUM_CHAINS}" 2
+echo ""
+
+echo ">>> V4-3: MSE 0.1 + cosine 0.01, same_t — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml "${NUM_CHAINS}" 2
+echo ""
+
+echo ">>> V4-4: MSE 0.1 + cosine 0.01 — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml "${NUM_CHAINS}" 2
+echo ""
+
 echo "============================================="
-echo "  All V2 experiments submitted!"
+echo "  All V2/V4 experiments submitted!"
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="

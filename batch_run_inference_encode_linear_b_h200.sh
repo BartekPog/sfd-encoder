@@ -1,0 +1,152 @@
+#!/bin/bash
+# =============================================================================
+# batch_run_inference_encode_linear_b_h200.sh
+#
+# Encode-linear FID50K inference for B-size H200 hidden-token experiments.
+#
+# Pass 1 (encode): A real dataset image is encoded in a single forward pass
+#   (mirroring training Pass 1) to recover clean hidden tokens h_clean.
+# Pass 2 (generate): Noise is added to h_clean at level start_t, and hidden
+#   tokens are linearly denoised from start_t → 1.0 during image generation.
+#
+# Usage:
+#   bash batch_run_inference_encode_linear_b_h200.sh [ckpt_step]
+#
+# Arguments:
+#   ckpt_step  — checkpoint step to evaluate (default: 80000)
+#
+# All experiments use:  Euler sampler, 100 steps, cfg_scale=1.0, FID50K,
+#                       --encode_linear_start_t <sweep> --hidden_sphere_clamp
+# =============================================================================
+
+set -euo pipefail
+
+CKPT_STEP=${1:-80000}
+CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
+
+# ---- SLURM settings (H200 cluster / DAIS) ----
+TIME=${TIME:-"00-8:00:00"}
+NUM_GPUS=1
+GPUS="h200:${NUM_GPUS}"
+MEM="180G"
+CPUS_PER_TASK=4
+PRECISION="bf16"
+
+# ---- Inference output directory ----
+INFERENCE_OUTPUT_DIR="outputs/inference"
+
+# ---- Start-t values to sweep ----
+START_T_VALUES=(0.50 0.70 0.90)
+
+# ---- Hidden-token experiment definitions ----
+# Format: "config_yaml|train_exp_name[|ckpt_step_override]"
+EXPERIMENTS=(
+    # ---- V2 experiments ----
+    # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
+    # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
+    # "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
+    # "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
+    # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
+    # # H16
+    # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+
+    # ---- V4 experiments (from v2_finetune_no_hidden/1540000.pt) ----
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
+    "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
+)
+
+echo "============================================="
+echo "  B-size H200 — FID50K Inference (ENCODE-LINEAR + SPHERE CLAMP)"
+echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
+echo "  Sampler: Euler, 100 steps"
+echo "  Mode: encode real image → noisy h_init → linear denoise from start_t"
+echo "  Start-t sweep: ${START_T_VALUES[*]}"
+echo "  GPUs: ${NUM_GPUS} x H200"
+echo "  Experiments: ${#EXPERIMENTS[@]}"
+echo "============================================="
+echo ""
+
+SUBMITTED=0
+
+for START_T in "${START_T_VALUES[@]}"; do
+    # Format start_t for filenames (e.g. 0.30 → 030)
+    START_T_TAG=$(echo "${START_T}" | tr -d '.')
+
+    for ENTRY in "${EXPERIMENTS[@]}"; do
+        IFS='|' read -r CONFIG_PATH TRAIN_EXP_NAME EXP_CKPT_STEP_OVERRIDE <<< "${ENTRY}"
+        EXP_CKPT_STEP=${EXP_CKPT_STEP_OVERRIDE:-${CKPT_STEP}}
+        EXP_CKPT_NAME=$(printf "%07d" "${EXP_CKPT_STEP}")
+        CKPT_PATH="outputs/train/${TRAIN_EXP_NAME}/checkpoints/${EXP_CKPT_NAME}.pt"
+
+        if [ ! -f "${CKPT_PATH}" ]; then
+            echo "  SKIP: ${TRAIN_EXP_NAME} (start_t=${START_T}) — checkpoint ${CKPT_PATH} not found"
+            continue
+        fi
+
+        INFER_EXP_NAME="${TRAIN_EXP_NAME}_${EXP_CKPT_NAME}"
+        EXP_LABEL=$(basename "${CONFIG_PATH}" .yaml)
+        JOBSCRIPT="jobs/infer_enclin${START_T_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
+        OUTPUT="job_outputs/infer_enclin${START_T_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
+        mkdir -p "$(dirname "${JOBSCRIPT}")"
+        mkdir -p "$(dirname "${OUTPUT}")"
+
+        cat > "${JOBSCRIPT}" <<SLURM_EOF
+#!/bin/bash
+#SBATCH --job-name inel${START_T_TAG}_${EXP_LABEL}
+#SBATCH --output ${OUTPUT}
+#SBATCH --time ${TIME}
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=${NUM_GPUS}
+#SBATCH --cpus-per-task=${CPUS_PER_TASK}
+#SBATCH --mem=${MEM}
+#SBATCH --gres gpu:${GPUS}
+
+echo -n 'date: '; date '+%Y-%m-%d %H:%M:%S'
+echo "Inference (encode-linear start_t=${START_T} + sphere clamp): ${EXP_LABEL} @ step ${EXP_CKPT_STEP}"
+
+source ~/.bashrc
+module load python-waterboa ffmpeg cuda/13.0
+source ./.venv-sfd/bin/activate
+
+export TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch
+export HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf
+
+GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
+    bash run_inference.sh ${CONFIG_PATH} \\
+    ckpt_path=${CKPT_PATH} \\
+    sample.sampling_method=euler \\
+    sample.num_sampling_steps=100 \\
+    sample.fid_num=50000 \\
+    sample.balanced_sampling=true \\
+    train.output_dir=${INFERENCE_OUTPUT_DIR} \\
+    train.exp_name=${INFER_EXP_NAME} \\
+    --encode_linear_start_t ${START_T} \\
+    --hidden_sphere_clamp
+python save_fid_result.py \\
+    --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \\
+    --config     ${CONFIG_PATH} \\
+    --ckpt_step  ${EXP_CKPT_STEP} \\
+    --inference_type encodelinear \\
+    --sampler euler \\
+    --num_steps 100 \\
+    --hidden_sphere_clamp \\
+    --encode_linear_start_t ${START_T}
+echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
+SLURM_EOF
+
+        JOB_ID=$(sbatch --parsable "${JOBSCRIPT}")
+        echo "  ${TRAIN_EXP_NAME} (start_t=${START_T}): submitted job ${JOB_ID}"
+        rm -f "${JOBSCRIPT}"
+        SUBMITTED=$((SUBMITTED + 1))
+    done
+done
+
+echo ""
+echo "============================================="
+echo "  Submitted ${SUBMITTED} encode-linear inference jobs."
+echo "  Monitor with:  squeue -u \$USER"
+echo "============================================="

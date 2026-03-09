@@ -2,11 +2,12 @@
 Sampling Scripts of SFD.
 """
 
-import os, math, json, pickle, logging, argparse, yaml, torch, numpy as np
+import os, math, json, pickle, logging, argparse, yaml, torch, numpy as np, random
 from time import time, strftime
 from glob import glob
 from copy import deepcopy
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
+from safetensors import safe_open as _safe_open
 from PIL import Image
 from tqdm import tqdm
 import torch
@@ -75,11 +76,48 @@ def update_autoguidance_ckpt_path(config, ckpt_iter):
 
     return config
 
+def encode_hidden_from_image(model, x1_batch, y_batch, semfirst_delta_t, normalize_hidden, device):
+    """
+    Single-step hidden-token encoding (mirrors Pass 1 in training_losses_hidden).
+
+    Given clean image latents *x1_batch* (already normalised & on device), run one
+    forward pass with t_img=1 (clean) and t_hid=0 (pure noise) to recover the
+    clean hidden encoding  h_clean = x0_h + v_h.
+
+    Returns:
+        h_clean  (B, num_hidden_tokens, hidden_token_dim)  on *device*
+    """
+    B = x1_batch.shape[0]
+    num_hidden_tokens = model.num_hidden_tokens
+    hidden_token_dim = model.hidden_token_dim
+
+    x0_h = torch.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+    t_encode_img = torch.ones(B, device=device)      # image is clean (t=1)
+    t_encode_hid = torch.zeros(B, device=device)     # hidden is pure noise (t=0)
+
+    if semfirst_delta_t > 0:
+        t_encode_img_for_model = (t_encode_img, t_encode_img)
+    else:
+        t_encode_img_for_model = t_encode_img
+
+    with torch.no_grad():
+        out = model(x1_batch, t=t_encode_img_for_model, y=y_batch,
+                    x_hidden=x0_h, t_hidden=t_encode_hid)
+    h_velocity = out[1]
+    h_clean = x0_h + h_velocity
+
+    if normalize_hidden:
+        h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+
+    return h_clean
+
+
 # sample function
 def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_interval_start=None, timestep_shift=None,
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
               fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
-              hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False):
+              hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False,
+              encode_first_pass=False, encode_linear_start_t=None):
     """
     Run sampling.
     """
@@ -174,6 +212,10 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += "-hsphereclamp"
     if two_pass:
         folder_name += "-twopass"
+    if encode_first_pass:
+        folder_name += "-encodefirst"
+    if encode_linear_start_t is not None:
+        folder_name += f"-enclin{encode_linear_start_t:.2f}"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
@@ -424,6 +466,70 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         if accelerator.process_index == 0:
             print_with_prefix('Two-pass mode: pass1=linear, pass2=fixed')
 
+    # Encode-first mode: encode real images, then generate with fixed hidden
+    # --- Encode-based modes: encode_first_pass (fixed) or encode_linear (partial denoise) ---
+    sample_fn_encode_gen = None
+    sample_fn_encode_linear = None
+    _needs_encode_setup = encode_first_pass or encode_linear_start_t is not None
+    if _needs_encode_setup:
+        assert use_hidden and use_semantic_first, "Encode modes require hidden tokens and semantic-first mode"
+        common_ode_kwargs = dict(
+            sampling_method=train_config['sample']['sampling_method'],
+            num_steps=train_config['sample']['num_sampling_steps'],
+            atol=train_config['sample']['atol'],
+            rtol=train_config['sample']['rtol'],
+            reverse=train_config['sample']['reverse'],
+            timestep_shift=timestep_shift,
+            semfirst_delta_t=semfirst_delta_t,
+            semantic_chans=semantic_chans,
+            num_hidden_tokens=model.num_hidden_tokens,
+            hidden_token_dim=model.hidden_token_dim,
+        )
+        if encode_first_pass:
+            sample_fn_encode_gen = sampler.sample_ode_semantic_first_hidden(
+                **common_ode_kwargs, hidden_schedule="fixed",
+                hidden_sphere_clamp=hidden_sphere_clamp,
+            )
+        if encode_linear_start_t is not None:
+            sample_fn_encode_linear = sampler.sample_ode_semantic_first_hidden(
+                **common_ode_kwargs, hidden_schedule="encode_linear",
+                hidden_schedule_start_t=encode_linear_start_t,
+                hidden_sphere_clamp=hidden_sphere_clamp,
+            )
+        # Build class → dataset-index mapping by reading labels from each shard
+        # (fast: ~1K shard files, each opened once to read all labels)
+        encode_dataset = ImgLatentDataset(
+            data_dir=train_config['data']['data_path'],
+            latent_norm=train_config['data'].get('latent_norm', False),
+            latent_sv_norm=train_config['data'].get('latent_sv_norm', False),
+            latent_multiplier=train_config['data'].get('latent_multiplier', 0.18215),
+        )
+        if accelerator.process_index == 0:
+            print_with_prefix('Encode setup: building class index from dataset shards...')
+        enc_cls2idx = defaultdict(list)
+        global_offset = 0
+        for shard_path in sorted(glob(os.path.join(train_config['data']['data_path'], '*.safetensors'))):
+            with _safe_open(shard_path, framework='pt', device='cpu') as f:
+                labels_tensor = f.get_slice('labels')[:]
+            for local_i in range(labels_tensor.shape[0]):
+                lbl = int(labels_tensor[local_i].item())
+                enc_cls2idx[lbl].append(global_offset + local_i)
+            global_offset += labels_tensor.shape[0]
+        # Deterministic shuffle within each class (seeded by rank seed)
+        for k in enc_cls2idx:
+            random.Random(seed).shuffle(enc_cls2idx[k])
+        enc_cls_ptr = defaultdict(int)  # per-class pointer for round-robin
+        normalize_hidden = train_config['model'].get('normalize_hidden', True)
+        if accelerator.process_index == 0:
+            print_with_prefix(f'  Class index: {len(enc_cls2idx)} classes, {global_offset} total samples')
+            print_with_prefix(f'  Normalize hidden: {normalize_hidden}')
+            if hidden_sphere_clamp:
+                print_with_prefix('  Hidden sphere clamping during generation: enabled')
+            if encode_first_pass:
+                print_with_prefix('Encode-first mode: encode real images → fixed hidden → generate')
+            if encode_linear_start_t is not None:
+                print_with_prefix(f'Encode-linear mode: encode → noisy h_init (start_t={encode_linear_start_t:.2f}) → linear denoise')
+
     if vae is None:
         vae = VA_VAE(
             f'tokenizer/configs/{train_config["vae"]["model_name"]}.yaml',
@@ -566,53 +672,156 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             # Sample inputs:
             z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
 
-            # Get labels (fixed, balanced, or random)
-            if fixed_class_label is not None:
-                # Use fixed class label for all samples
-                y = torch.tensor([fixed_class_label] * n, device=device)
-            elif use_balanced_sampling:
-                # Use the same index calculation as saving images
-                # to ensure label-image correspondence
-                y_list = []
-                for sample_idx in range(n):
-                    global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
-
-                    if global_index >= fid_num:
-                        # Beyond fid_num, use random sampling
-                        y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
-                    else:
-                        # Within fid_num, use balanced sampling
-                        y_list.append(balanced_labels[global_index:global_index+1])
-
-                y = torch.cat(y_list, dim=0)
-            else:
-                y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
-
-            # Setup classifier-free guidance:
-            if using_cfg:
-                if autoguidance_model is not None:
-                    # AutoGuidance mode: use small model for unconditional
-                    model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=True, cfg_interval_start=cfg_interval_start,
-                                      autoguidance_model=autoguidance_model,
-                                      cfg_scale_sem=effective_cfg_sem, cfg_scale_tex=effective_cfg_tex)
-                    model_fn = model.forward_with_autoguidance
+            if encode_first_pass:
+                # --- Encode-first mode ---
+                # Use balanced / fixed / random labels (same as non-encode path),
+                # then fetch real images of the *matching* class for encoding.
+                if fixed_class_label is not None:
+                    y = torch.tensor([fixed_class_label] * n, device=device)
+                elif use_balanced_sampling:
+                    y_list = []
+                    for sample_idx in range(n):
+                        global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
+                        if global_index >= fid_num:
+                            y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
+                        else:
+                            y_list.append(balanced_labels[global_index:global_index+1])
+                    y = torch.cat(y_list, dim=0)
                 else:
-                    # Standard CFG mode
+                    y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
+
+                # Fetch a real image for each label (class-matched, round-robin)
+                x1_list = []
+                for lbl_tensor in y:
+                    lbl = int(lbl_tensor.item())
+                    indices = enc_cls2idx[lbl]
+                    ptr = enc_cls_ptr[lbl]
+                    dataset_idx = indices[ptr % len(indices)]
+                    enc_cls_ptr[lbl] = ptr + 1
+                    item = encode_dataset[dataset_idx]
+                    x1_list.append(item[0])  # latent tensor (already normalised)
+                x1_real = torch.stack(x1_list, dim=0).to(device)
+
+                # Encode hidden tokens from these class-matched real images
+                normalize_hidden = train_config['model'].get('normalize_hidden', True)
+                h_clean = encode_hidden_from_image(
+                    model, x1_real, y, semfirst_delta_t, normalize_hidden, device)
+
+                # Setup CFG for generation pass
+                if using_cfg:
                     z = torch.cat([z, z], 0)
                     y_null = torch.tensor([1000] * n, device=device)
-                    y = torch.cat([y, y_null], 0)
-                    model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=True, cfg_interval_start=cfg_interval_start)
+                    y_cfg = torch.cat([y, y_null], 0)
+                    model_kwargs = dict(y=y_cfg, cfg_scale=cfg_scale, cfg_interval=True,
+                                       cfg_interval_start=cfg_interval_start)
                     model_fn = model.forward_with_cfg
-            else:
-                model_kwargs = dict(y=y)
-                model_fn = model.forward
+                    h_clean = torch.cat([h_clean, h_clean], 0)
+                else:
+                    model_kwargs = dict(y=y)
+                    model_fn = model.forward
 
-            if two_pass:
-                result_pass1 = sample_fn_pass1(z, model_fn, _return_hidden=True, **model_kwargs)
-                h_clean = result_pass1[1]
-                samples = sample_fn_pass2(z, model_fn, _z_hidden=h_clean, **model_kwargs)[-1]
+                samples = sample_fn_encode_gen(z, model_fn, _z_hidden=h_clean, **model_kwargs)[-1]
+            elif encode_linear_start_t is not None:
+                # --- Encode-linear mode ---
+                # Same class-matched encoding as encode-first, but add noise to
+                # h_clean and linearly denoise hidden tokens from start_t → 1.0.
+                if fixed_class_label is not None:
+                    y = torch.tensor([fixed_class_label] * n, device=device)
+                elif use_balanced_sampling:
+                    y_list = []
+                    for sample_idx in range(n):
+                        global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
+                        if global_index >= fid_num:
+                            y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
+                        else:
+                            y_list.append(balanced_labels[global_index:global_index+1])
+                    y = torch.cat(y_list, dim=0)
+                else:
+                    y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
+
+                # Fetch a real image for each label (class-matched, round-robin)
+                x1_list = []
+                for lbl_tensor in y:
+                    lbl = int(lbl_tensor.item())
+                    indices = enc_cls2idx[lbl]
+                    ptr = enc_cls_ptr[lbl]
+                    dataset_idx = indices[ptr % len(indices)]
+                    enc_cls_ptr[lbl] = ptr + 1
+                    item = encode_dataset[dataset_idx]
+                    x1_list.append(item[0])
+                x1_real = torch.stack(x1_list, dim=0).to(device)
+
+                # Encode hidden tokens from class-matched real images
+                h_clean = encode_hidden_from_image(
+                    model, x1_real, y, semfirst_delta_t, normalize_hidden, device)
+
+                # Create noisy initial hidden state at start_t:
+                # h_init = start_t * h_clean + (1 - start_t) * noise
+                h_noise = torch.randn_like(h_clean)
+                h_init = encode_linear_start_t * h_clean + (1.0 - encode_linear_start_t) * h_noise
+
+                # Setup CFG for generation pass
+                if using_cfg:
+                    z = torch.cat([z, z], 0)
+                    y_null = torch.tensor([1000] * n, device=device)
+                    y_cfg = torch.cat([y, y_null], 0)
+                    model_kwargs = dict(y=y_cfg, cfg_scale=cfg_scale, cfg_interval=True,
+                                       cfg_interval_start=cfg_interval_start)
+                    model_fn = model.forward_with_cfg
+                    h_init = torch.cat([h_init, h_init], 0)
+                else:
+                    model_kwargs = dict(y=y)
+                    model_fn = model.forward
+
+                samples = sample_fn_encode_linear(z, model_fn, _z_hidden=h_init, **model_kwargs)[-1]
             else:
-                samples = sample_fn(z, model_fn, **model_kwargs)[-1]
+                # Get labels (fixed, balanced, or random)
+                if fixed_class_label is not None:
+                    # Use fixed class label for all samples
+                    y = torch.tensor([fixed_class_label] * n, device=device)
+                elif use_balanced_sampling:
+                    # Use the same index calculation as saving images
+                    # to ensure label-image correspondence
+                    y_list = []
+                    for sample_idx in range(n):
+                        global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
+
+                        if global_index >= fid_num:
+                            # Beyond fid_num, use random sampling
+                            y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
+                        else:
+                            # Within fid_num, use balanced sampling
+                            y_list.append(balanced_labels[global_index:global_index+1])
+
+                    y = torch.cat(y_list, dim=0)
+                else:
+                    y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
+
+                # Setup classifier-free guidance:
+                if using_cfg:
+                    if autoguidance_model is not None:
+                        # AutoGuidance mode: use small model for unconditional
+                        model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=True, cfg_interval_start=cfg_interval_start,
+                                          autoguidance_model=autoguidance_model,
+                                          cfg_scale_sem=effective_cfg_sem, cfg_scale_tex=effective_cfg_tex)
+                        model_fn = model.forward_with_autoguidance
+                    else:
+                        # Standard CFG mode
+                        z = torch.cat([z, z], 0)
+                        y_null = torch.tensor([1000] * n, device=device)
+                        y = torch.cat([y, y_null], 0)
+                        model_kwargs = dict(y=y, cfg_scale=cfg_scale, cfg_interval=True, cfg_interval_start=cfg_interval_start)
+                        model_fn = model.forward_with_cfg
+                else:
+                    model_kwargs = dict(y=y)
+                    model_fn = model.forward
+
+                if two_pass:
+                    result_pass1 = sample_fn_pass1(z, model_fn, _return_hidden=True, **model_kwargs)
+                    h_clean = result_pass1[1]
+                    samples = sample_fn_pass2(z, model_fn, _z_hidden=h_clean, **model_kwargs)[-1]
+                else:
+                    samples = sample_fn(z, model_fn, **model_kwargs)[-1]
             if using_cfg and autoguidance_model is None:
                 samples, _ = samples.chunk(2, dim=0)  # Remove null class samples (only for standard CFG)
             samples = drop_semantic_chansels(train_config, samples)
@@ -671,6 +880,14 @@ if __name__ == "__main__":
     parser.add_argument('--hidden_sphere_clamp', action='store_true', default=False,
                         help='At each hidden-token step, project the single-step clean prediction onto the unit sphere '
                              'token-wise before computing the velocity. Has no effect when hidden_schedule=fixed.')
+    parser.add_argument('--encode_first_pass', action='store_true', default=False,
+                        help='Encode-then-generate mode: first pass encodes a real image from the dataset '
+                             '(single forward step, like training Pass 1), second pass generates with the '
+                             'resulting fixed hidden encoding.  Requires hidden tokens + semantic-first.')
+    parser.add_argument('--encode_linear_start_t', type=float, default=None,
+                        help='Encode-linear mode: encode GT hidden tokens from real images, add noise '
+                             'to level start_t, then linearly denoise hidden from start_t to 1.0 during '
+                             'image generation. Sweep values like 0.3, 0.5, 0.7, 0.9.')
     args, unknown = parser.parse_known_args()
     accelerator = Accelerator()
     train_config = load_config(args.config)
@@ -745,7 +962,9 @@ if __name__ == "__main__":
         hidden_schedule=args.hidden_schedule,
         hidden_schedule_max_t=args.hidden_schedule_max_t,
         two_pass=args.two_pass,
-        hidden_sphere_clamp=args.hidden_sphere_clamp)
+        hidden_sphere_clamp=args.hidden_sphere_clamp,
+        encode_first_pass=args.encode_first_pass,
+        encode_linear_start_t=args.encode_linear_start_t)
 
     if not args.demo and args.calculate_fid:
         # calculate FID
