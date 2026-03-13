@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-180000}
+CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -47,10 +47,17 @@ EXPERIMENTS=(
     # H16 — longer to train, include when checkpoint is ready
     # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
     # ---- V4 experiments (from v2_finetune_no_hidden/1540000.pt) ----
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02_merged.yaml|v4_base_h16_mse02_merged"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged.yaml|v4_mse01_cos001_merged"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc.yaml|v4_mse01_cos001_merged_noisy_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml|v4_mse002_cos0005_merged_noisy_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc_curriculum.yaml|v4_mse01_cos001_merged_noisy_enc_curriculum"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc.yaml|v4_mse01_cos001_noisy_enc"
 )
 
 echo "============================================="

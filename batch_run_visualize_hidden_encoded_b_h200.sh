@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-200000}
+CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings ----
@@ -40,10 +40,16 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
     # # H16
     # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
+    # New batch of V4
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc.yaml|v4_mse01_cos001_merged_noisy_enc"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc.yaml|v4_mse01_cos001_noisy_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc_curriculum.yaml|v4_mse01_cos001_merged_noisy_enc_curriculum"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02_merged.yaml|v4_base_h16_mse02_merged"
 )
 
 echo "============================================="

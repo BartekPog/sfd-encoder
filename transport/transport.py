@@ -192,6 +192,12 @@ class Transport:
         t = t.to(x1)
         return t, x0, x1
     
+    def dyn_grad_scale(self, h_clean, t_h, hidden_grad_dyn_scale, eps=1e-4):
+        inverted_scale = (1/(hidden_grad_dyn_scale + eps))
+
+        weight_t = (1+inverted_scale) / (t_h + inverted_scale)
+        return h_clean * weight_t.view(-1, 1, 1) - (1 - weight_t).view(-1, 1, 1) * h_clean.detach()
+    
 
     def training_losses(
         self, 
@@ -323,48 +329,67 @@ class Transport:
         hidden_cos_weight=0.0,
         backward_fn=None,
         hidden_same_t_as_img=False,
+        noisy_img_encode=False,
+        hidden_t_shift=0.0,
+        hidden_loss_scale=1.0,
+        hidden_grad_dyn_scale=0.0,
     ):
         """
-        Self-encoder training loss with hidden tokens.
+        Self-encoder training loss with hidden tokens (3-pass variant).
 
         Three forward passes, structured for memory efficiency:
-          Pass 1: Clean image + pure noise hidden -> predict encoding (single-step)
-          Pass 3: Noisy image + noisy DETACHED encoding -> hidden denoising loss
-                  (Run before Pass 2; if backward_fn is provided, its activations
-                   are freed immediately via backward, reducing peak memory)
-          Pass 2: Noisy image + noisy encoding (grad flows through encoding) -> image denoising loss
+          Pass 1  (encode):  Image + pure-noise hidden → h_clean
+          Pass 3  (hidden):  Noisy image + noisy DETACHED h_clean → hidden loss
+                             (Run before Pass 2; if backward_fn is provided,
+                              activations freed immediately via backward)
+          Pass 2  (image):   Noisy image + noisy h_clean (grad flows) → image loss
+
+        The encoder image in Pass 1 is clean (t=1) by default.  When
+        ``noisy_img_encode=True``, two timesteps are sampled from the training
+        distribution; the higher one is used for the encoder (Pass 1, cleaner
+        image) and the lower one for the denoiser (Passes 2/3, noisier image).
+        Both share the same Gaussian noise, staying on the same interpolation
+        trajectory.  This keeps the model's internal features in-distribution
+        (logit-normal sampling puts near-zero density at t=1).
 
         When backward_fn is provided, Pass 3's loss is backward-ed right after
-        computation and before Pass 2 runs. This reduces peak activation memory
-        from ~3x to ~2x a single forward pass, since at most 2 forward-pass
-        activation graphs coexist at any time (Pass 1 + Pass 3 during step 3,
-        then Pass 1 + Pass 2 during step 5).
+        computation and before Pass 2 runs.  This reduces peak activation
+        memory from ~3× to ~2× a single forward pass.
 
         Args:
-            model: HiddenLightningDiT model (possibly wrapped in DDP)
-            x1: clean data (B, C, H, W)
-            model_kwargs: dict with 'y' (class labels)
-            hidden_weight: weight for hidden denoising loss (pass 3)
-            normalize_hidden: if True, project h_clean tokens onto unit sphere to
-                prevent variance explosion (default True)
-            hidden_reg_weight: weight for regularization loss that penalizes hidden
-                token norms deviating from 1. Set to 0 to disable. (default 0.01)
+            model: HiddenLightningDiT model (possibly wrapped in DDP).
+            x1: clean data (B, C, H, W).
+            model_kwargs: dict with 'y' (class labels).
+            sp_timesteps: optional (t_lo, t_hi) for uniform timestep override.
+            shifted_mu: mean shift for logit-normal sampling.
+            use_repa: if True, compute REPA representation-alignment loss.
+            feature_dino: DINOv2 features (required when use_repa=True).
+            hidden_weight: weight for hidden denoising MSE loss (default 1.0).
+            normalize_hidden: if True, project h_clean onto unit sphere to
+                prevent variance explosion (default True).
+            hidden_reg_weight: weight for sphere-regularisation loss
+                (penalises ||h|| deviating from 1). 0 to disable (default 0.01).
             hidden_cos_weight: weight for cosine similarity loss between the
-                single-step predicted clean hidden tokens (from Pass 3) and the
-                target clean encodings (from Pass 1). Operates in token space
-                (cosine similarity along hidden_token_dim), making it well-suited
-                when tokens are regularized to lie on the unit sphere.
-                Set to 0 to disable (default 0.0).
-            hidden_same_t_as_img: if True, the hidden-token noise level in Pass 3
-                and Pass 2 is set equal to t_img (the image timestep) rather than
-                being sampled independently. This makes training consistent with
-                the "linear" inference hidden schedule where t_hidden = t_img.
-                Default False to preserve backward compatibility.
+                single-step predicted clean hidden tokens and the target
+                encodings. 0 to disable (default 0.0).
             backward_fn: callable(loss) that runs backward on a loss tensor.
-                Should wrap the backward call with model.no_sync() when using DDP
-                to defer gradient synchronization to the main backward call.
-                If None, all losses are returned for a single combined backward
-                (higher peak memory, but simpler).
+                Should wrap with model.no_sync() under DDP to defer gradient
+                sync.  If None, all losses returned for a single backward.
+            hidden_same_t_as_img: if True, hidden noise level equals t_img
+                rather than independent sampling.  Matches the "linear"
+                inference schedule (default False).
+            noisy_img_encode: if True, the encoder sees a noisy image at
+                t = max(t_a, t_b) sampled from the logit-normal training
+                distribution instead of a clean image at t=1.  The denoiser
+                sees t = min(t_a, t_b). Both use the same noise (default False).
+            hidden_t_shift: logit-normal mu for hidden timestep sampling.
+                Positive values bias t_h toward 1 (cleaner hidden tokens).
+                Use with a curriculum that decays from a large value to a
+                small permanent bias (default 0.0 = uniform).
+            hidden_loss_scale: multiplier for Pass 3 inclusion.  In the
+                3-pass variant this is used as a Bernoulli probability:
+                Pass 3 is run with probability hidden_loss_scale and skipped
+                otherwise.  1.0 = always run (default).
         """
         if model_kwargs is None:
             model_kwargs = {}
@@ -385,25 +410,56 @@ class Transport:
         # The model predicts velocity v = x1 - x0 for hidden, so:
         #   h_clean = x0_h + v_h  (recover clean encoding from noise + predicted velocity)
         x0_h = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
-        t_encode_img = th.ones(B, device=device)    # t=1: image is clean data
         t_encode_hid = th.zeros(B, device=device)   # t=0: hidden is pure noise
 
-        # Forward pass 1: model sees clean image (t=1) + pure noise hidden (t=0)
-        # Model predicts velocity for hidden: v_h = x1_h - x0_h
-        # Recover clean encoding: h_clean = x0_h + v_h
-        if self.semfirst_delta_t > 0:
-            t_encode_img_for_model = (t_encode_img, t_encode_img)  # both tex and sem at t=1
-        else:
-            t_encode_img_for_model = t_encode_img
+        if noisy_img_encode:
+            # Sample two timesteps from training distribution; assign
+            # max -> encoder (cleaner image), min -> denoiser (noisier image).
+            # Shared noise keeps both on the same interpolation trajectory.
+            t_a, _, _ = self.sample(x1, sp_timesteps, shifted_mu)
+            t_b, _, _ = self.sample(x1, sp_timesteps, shifted_mu)
+            t_encode_raw = th.max(t_a, t_b)
+            t_denoise_raw = th.min(t_a, t_b)
+            x0_img = th.randn_like(x1)
 
-        # Use unwrapped model for Pass 1 (avoids DDP tracking; gradients flow
-        # back through h_clean → Pass 2's DDP backward handles sync)
-        pass1_out = m(x1, t=t_encode_img_for_model, x_hidden=x0_h,
+            if self.semfirst_delta_t > 0:
+                x0_sem = x0_img[:, -self.semantic_chans:]
+                x0_tex = x0_img[:, :-self.semantic_chans]
+                x1_sem = x1[:, -self.semantic_chans:]
+                x1_tex = x1[:, :-self.semantic_chans]
+                # Encoder image at t_encode_raw
+                t_sem_enc = (t_encode_raw * (1 + self.semfirst_delta_t)).clamp(max=1.0)
+                t_tex_enc = (t_sem_enc - self.semfirst_delta_t).clamp(min=0.0)
+                _, xt_sem_enc, _ = self.path_sampler.plan(t_sem_enc, x0_sem, x1_sem)
+                _, xt_tex_enc, _ = self.path_sampler.plan(t_tex_enc, x0_tex, x1_tex)
+                xt_encode = th.cat([xt_tex_enc, xt_sem_enc], dim=1)
+                t_encode_img_for_model = (t_tex_enc, t_sem_enc)
+                # Denoiser image at t_denoise_raw
+                t_sem_den = (t_denoise_raw * (1 + self.semfirst_delta_t)).clamp(max=1.0)
+                t_tex_den = (t_sem_den - self.semfirst_delta_t).clamp(min=0.0)
+                t_sem_den, xt_sem, ut_sem = self.path_sampler.plan(t_sem_den, x0_sem, x1_sem)
+                t_tex_den, xt_tex, ut_tex = self.path_sampler.plan(t_tex_den, x0_tex, x1_tex)
+                t_img_for_model = (t_tex_den, t_sem_den)
+                xt_img = th.cat([xt_tex, xt_sem], dim=1)
+                ut_img = th.cat([ut_tex, ut_sem], dim=1)
+            else:
+                _, xt_encode, _ = self.path_sampler.plan(t_encode_raw, x0_img, x1)
+                t_encode_img_for_model = t_encode_raw
+                t_denoise_raw, xt_img, ut_img = self.path_sampler.plan(t_denoise_raw, x0_img, x1)
+                t_img_for_model = t_denoise_raw
+            t_img = t_denoise_raw  # for hidden_same_t_as_img
+        else:
+            t_encode_img = th.ones(B, device=device)    # t=1: image is clean data
+            if self.semfirst_delta_t > 0:
+                t_encode_img_for_model = (t_encode_img, t_encode_img)
+            else:
+                t_encode_img_for_model = t_encode_img
+            xt_encode = x1  # clean image
+
+        pass1_out = m(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
                       t_hidden=t_encode_hid, **model_kwargs)
-        # Model may return 2 or 3 values depending on use_repa; we only need h_velocity
         h_velocity = pass1_out[1]
-        # Reconstruct clean encoding from velocity prediction
-        h_clean = x0_h + h_velocity  # x1 = x0 + v
+        h_clean = x0_h + h_velocity
 
         # Regularization: penalize hidden token norms deviating from unit sphere
         if hidden_reg_weight > 0:
@@ -415,26 +471,26 @@ class Transport:
             h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
 
         # ============ SAMPLE IMAGE NOISE ============
-        # Needed for both Pass 3 and Pass 2; sampled once, shared.
-        t_img, x0_img, x1_img = self.sample(x1, sp_timesteps, shifted_mu)
+        if not noisy_img_encode:
+            t_img, x0_img, x1_img = self.sample(x1, sp_timesteps, shifted_mu)
 
-        if self.semfirst_delta_t > 0:
-            t_sem = t_img * (1 + self.semfirst_delta_t)
-            t_tex = t_sem - self.semfirst_delta_t
-            t_sem = t_sem.clamp(max=1.0)
-            t_tex = t_tex.clamp(min=0.0)
-            x0_sem = x0_img[:, -self.semantic_chans:]
-            x0_tex = x0_img[:, :-self.semantic_chans]
-            x1_sem = x1_img[:, -self.semantic_chans:]
-            x1_tex = x1_img[:, :-self.semantic_chans]
-            t_sem, xt_sem, ut_sem = self.path_sampler.plan(t_sem, x0_sem, x1_sem)
-            t_tex, xt_tex, ut_tex = self.path_sampler.plan(t_tex, x0_tex, x1_tex)
-            t_img_for_model = (t_tex, t_sem)
-            xt_img = th.cat([xt_tex, xt_sem], dim=1)
-            ut_img = th.cat([ut_tex, ut_sem], dim=1)
-        else:
-            t_img, xt_img, ut_img = self.path_sampler.plan(t_img, x0_img, x1_img)
-            t_img_for_model = t_img
+            if self.semfirst_delta_t > 0:
+                t_sem = t_img * (1 + self.semfirst_delta_t)
+                t_tex = t_sem - self.semfirst_delta_t
+                t_sem = t_sem.clamp(max=1.0)
+                t_tex = t_tex.clamp(min=0.0)
+                x0_sem = x0_img[:, -self.semantic_chans:]
+                x0_tex = x0_img[:, :-self.semantic_chans]
+                x1_sem = x1_img[:, -self.semantic_chans:]
+                x1_tex = x1_img[:, :-self.semantic_chans]
+                t_sem, xt_sem, ut_sem = self.path_sampler.plan(t_sem, x0_sem, x1_sem)
+                t_tex, xt_tex, ut_tex = self.path_sampler.plan(t_tex, x0_tex, x1_tex)
+                t_img_for_model = (t_tex, t_sem)
+                xt_img = th.cat([xt_tex, xt_sem], dim=1)
+                ut_img = th.cat([ut_tex, ut_sem], dim=1)
+            else:
+                t_img, xt_img, ut_img = self.path_sampler.plan(t_img, x0_img, x1_img)
+                t_img_for_model = t_img
 
         # ============ PASS 3: Hidden denoising (detached, run BEFORE Pass 2) ============
         # By running Pass 3 before Pass 2, we can backward it immediately (via
@@ -444,66 +500,75 @@ class Transport:
         h_clean_detached = h_clean.detach()
         t0_h, t1_h = self.check_interval(self.train_eps, self.sample_eps)
 
-        if hidden_same_t_as_img:
-            # Match the "linear" inference schedule: t_hidden = t_img.
-            # t_img holds the per-sample image timestep (shape B) sampled above;
-            # clamping ensures it stays within [t0_h, t1_h] for numerical safety.
-            t_h3 = t_img.clone().clamp(t0_h, t1_h)
+        # Stochastic Pass 3 gating: run with probability hidden_loss_scale.
+        # When skipped, hidden_loss is zero (no backward, saving compute).
+        run_pass3 = (hidden_loss_scale >= 1.0) or (th.rand(1).item() < hidden_loss_scale)
+
+        if run_pass3:
+            if hidden_same_t_as_img:
+                t_h3 = t_img.clone().clamp(t0_h, t1_h)
+            elif hidden_t_shift != 0:
+                t_h3 = self.sample_logit_normal(hidden_t_shift, 1, size=B).to(device)
+                t_h3 = t_h3 * (t1_h - t0_h) + t0_h
+            else:
+                t_h3 = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+            x0_h3 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+
+            t_h3_expanded = t_h3.view(B, 1, 1)
+            xt_h3 = t_h3_expanded * h_clean_detached + (1 - t_h3_expanded) * x0_h3
+            ut_h3 = h_clean_detached - x0_h3
+
+            # Detach image inputs for Pass 3 (no grad flow to image path)
+            xt_img_detached = xt_img.detach()
+            if isinstance(t_img_for_model, tuple):
+                t_img_detached = tuple(t.detach() for t in t_img_for_model)
+            else:
+                t_img_detached = t_img_for_model.detach()
+
+            # Use unwrapped model for Pass 3 (avoids multiple DDP forwards;
+            # backward_fn uses no_sync to defer gradient allreduce to Pass 2)
+            pass3_out = m(xt_img_detached, t=t_img_detached, x_hidden=xt_h3,
+                          t_hidden=t_h3, **model_kwargs)
+            h_pred3 = pass3_out[1]
+
+            hidden_loss = mean_flat((h_pred3 - ut_h3) ** 2)
+
+            if hidden_cos_weight > 0:
+                h1_pred3 = xt_h3 + (1 - t_h3_expanded) * h_pred3
+                hidden_cos_loss = mean_flat(
+                    1 - th.nn.functional.cosine_similarity(h1_pred3, h_clean_detached, dim=-1)
+                )
+            else:
+                hidden_cos_loss = None
+
+            # If backward_fn provided, backward Pass 3 immediately to free activations
+            if backward_fn is not None:
+                pass3_loss = hidden_loss.mean() * hidden_weight
+                if hidden_cos_loss is not None:
+                    pass3_loss = pass3_loss + hidden_cos_loss.mean() * hidden_cos_weight
+                backward_fn(pass3_loss)
+                hidden_loss_for_terms = hidden_loss.detach()
+                hidden_cos_loss_for_terms = hidden_cos_loss.detach() if hidden_cos_loss is not None else None
+            else:
+                hidden_loss_for_terms = hidden_loss * hidden_weight
+                hidden_cos_loss_for_terms = hidden_cos_loss * hidden_cos_weight if hidden_cos_loss is not None else None
         else:
-            t_h3 = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
-        x0_h3 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
-
-        t_h3_expanded = t_h3.view(B, 1, 1)
-        xt_h3 = t_h3_expanded * h_clean_detached + (1 - t_h3_expanded) * x0_h3
-        ut_h3 = h_clean_detached - x0_h3
-
-        # Detach image inputs for Pass 3 (no grad flow to image path)
-        xt_img_detached = xt_img.detach()
-        if isinstance(t_img_for_model, tuple):
-            t_img_detached = tuple(t.detach() for t in t_img_for_model)
-        else:
-            t_img_detached = t_img_for_model.detach()
-
-        # Use unwrapped model for Pass 3 (avoids multiple DDP forwards;
-        # backward_fn uses no_sync to defer gradient allreduce to Pass 2)
-        pass3_out = m(xt_img_detached, t=t_img_detached, x_hidden=xt_h3,
-                      t_hidden=t_h3, **model_kwargs)
-        h_pred3 = pass3_out[1]
-
-        hidden_loss = mean_flat((h_pred3 - ut_h3) ** 2)
-
-        # Single-step prediction of clean hidden tokens from Pass 3:
-        #   x_t = t*x1 + (1-t)*x0  →  x1 = x_t + (1-t)*v_pred
-        # Cosine similarity is computed per-token (along hidden_token_dim),
-        # then averaged over tokens; this is meaningful when tokens lie on the unit sphere.
-        if hidden_cos_weight > 0:
-            h1_pred3 = xt_h3 + (1 - t_h3_expanded) * h_pred3  # (B, num_tokens, dim)
-            hidden_cos_loss = mean_flat(
-                1 - th.nn.functional.cosine_similarity(h1_pred3, h_clean_detached, dim=-1)
-            )  # (B,)
-        else:
-            hidden_cos_loss = None
-
-        # If backward_fn provided, backward Pass 3 immediately to free activations
-        # before Pass 2's forward. Gradients accumulate on model parameters; they
-        # will be synchronized during the main backward call from the training loop.
-        if backward_fn is not None:
-            pass3_loss = hidden_loss.mean() * hidden_weight
-            if hidden_cos_loss is not None:
-                pass3_loss = pass3_loss + hidden_cos_loss.mean() * hidden_cos_weight
-            backward_fn(pass3_loss)
-            hidden_loss_for_terms = hidden_loss.detach()  # already backward-ed
-            hidden_cos_loss_for_terms = hidden_cos_loss.detach() if hidden_cos_loss is not None else None
-        else:
-            hidden_loss_for_terms = hidden_loss * hidden_weight
-            hidden_cos_loss_for_terms = hidden_cos_loss * hidden_cos_weight if hidden_cos_loss is not None else None
+            # Pass 3 skipped — report zero hidden loss (detached, no backward needed)
+            hidden_loss_for_terms = th.zeros(B, device=device)
+            hidden_cos_loss_for_terms = None
 
         # ============ PASS 2: Image denoising conditioned on encoding ============
         if hidden_same_t_as_img:
             t_h = t_img.clone().clamp(t0_h, t1_h)
+        elif hidden_t_shift != 0:
+            t_h = self.sample_logit_normal(hidden_t_shift, 1, size=B).to(device)
+            t_h = t_h * (t1_h - t0_h) + t0_h
         else:
             t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
         x0_h2 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+
+        if hidden_grad_dyn_scale > 0.0:
+            h_clean = self.dyn_grad_scale(h_clean, t_h, hidden_grad_dyn_scale)
 
         # Noise the encoding (gradient flows through h_clean from Pass 1!)
         t_h_expanded = t_h.view(B, 1, 1)
@@ -554,6 +619,263 @@ class Transport:
             terms['repa_loss'] = repa_loss * self.repa_weight
 
         # Hidden token regularization loss
+        if hidden_reg_weight > 0:
+            terms['hidden_reg_loss'] = hidden_reg_loss * hidden_reg_weight
+
+        return terms
+
+    def training_losses_hidden_merged(
+        self,
+        model,
+        x1,
+        model_kwargs=None,
+        sp_timesteps=None,
+        shifted_mu=0,
+        use_repa=False,
+        feature_dino=None,
+        hidden_weight=1.0,
+        normalize_hidden=True,
+        hidden_reg_weight=0.01,
+        hidden_cos_weight=0.0,
+        hidden_same_t_as_img=False,
+        noisy_img_encode=False,
+        hidden_t_shift=0.0,
+        hidden_loss_scale=1.0,
+    ):
+        """
+        Two-pass self-encoder training with merged image + hidden denoising.
+
+        Unlike ``training_losses_hidden`` (3 passes), this variant lets the
+        hidden denoising loss backpropagate through the noised hidden *input*
+        all the way back to Pass 1 (the encoder).  Because gradients now flow
+        from both the image loss and the hidden loss into the encoder, Passes 2
+        and 3 can be merged into a single forward pass:
+
+          Pass 1  (encode):  Image + pure-noise hidden → h_clean
+          Pass 2  (denoise): Noisy image + noisy h_clean → (img_pred, h_pred)
+                             image loss   = MSE(img_pred, ut_img)
+                             hidden loss  = MSE(h_pred, ut_h_detached)
+
+        The hidden velocity *target* ``ut_h`` is detached so that MSE does not
+        push directly on the encoding; supervision reaches the encoder only
+        through the *predicted* velocity ``h_pred`` and the noised input ``xt_h``.
+
+        When ``noisy_img_encode=True``, the encoder in Pass 1 sees a noisy
+        image at t = max(t_a, t_b) (sampled from the logit-normal training
+        distribution) instead of a clean image at t=1, and the denoiser in
+        Pass 2 uses t = min(t_a, t_b).  Both share the same noise.  This keeps
+        the model's internal features in-distribution.
+
+        This is simpler (2 forward passes, single backward) and ~33 % less
+        peak activation memory than the 3-pass variant with ``backward_fn``.
+
+        Args:
+            model: HiddenLightningDiT model (possibly wrapped in DDP).
+            x1: clean data (B, C, H, W).
+            model_kwargs: dict with 'y' (class labels).
+            sp_timesteps: optional (t_lo, t_hi) for uniform timestep override.
+            shifted_mu: mean shift for logit-normal sampling.
+            use_repa: if True, compute REPA representation-alignment loss.
+            feature_dino: DINOv2 features (required when use_repa=True).
+            hidden_weight: weight for hidden denoising MSE loss (default 1.0).
+            normalize_hidden: if True, project h_clean onto unit sphere
+                (default True).
+            hidden_reg_weight: weight for sphere-regularisation loss
+                (default 0.01; 0 to disable).
+            hidden_cos_weight: weight for cosine similarity loss on
+                single-step clean hidden prediction (default 0.0; 0 to disable).
+            hidden_same_t_as_img: if True, hidden noise level equals t_img
+                rather than independent sampling (default False).
+            noisy_img_encode: if True, the encoder sees a noisy image at
+                t = max(t_a, t_b) from the logit-normal distribution instead
+                of a clean image at t=1 (default False).
+            hidden_t_shift: logit-normal mu for hidden timestep sampling.
+                Positive values bias t_h toward 1 (cleaner hidden tokens).
+                Use with a curriculum that decays from a large value to a
+                small permanent bias (default 0.0 = uniform).
+            hidden_loss_scale: multiplier for the hidden denoising loss.
+                In the merged variant this directly scales hidden_loss.
+                Ramp from 0 to 1 over training to delay hidden denoising
+                pressure (default 1.0).
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+
+        # Unwrap DDP / Accelerate wrappers
+        m = model
+        while hasattr(m, 'module'):
+            m = m.module
+        num_hidden_tokens = m.num_hidden_tokens
+        hidden_token_dim = m.hidden_token_dim
+        B = x1.shape[0]
+        device = x1.device
+
+        # ============ PASS 1: Encode ============
+        x0_h = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+        t_encode_hid = th.zeros(B, device=device)
+
+        if noisy_img_encode:
+            # Sample two timesteps; max -> encoder (cleaner), min -> denoiser
+            t_a, _, _ = self.sample(x1, sp_timesteps, shifted_mu)
+            t_b, _, _ = self.sample(x1, sp_timesteps, shifted_mu)
+            t_encode_raw = th.max(t_a, t_b)
+            t_denoise_raw = th.min(t_a, t_b)
+            x0_img = th.randn_like(x1)
+
+            if self.semfirst_delta_t > 0:
+                x0_sem = x0_img[:, -self.semantic_chans:]
+                x0_tex = x0_img[:, :-self.semantic_chans]
+                x1_sem = x1[:, -self.semantic_chans:]
+                x1_tex = x1[:, :-self.semantic_chans]
+                t_sem_enc = (t_encode_raw * (1 + self.semfirst_delta_t)).clamp(max=1.0)
+                t_tex_enc = (t_sem_enc - self.semfirst_delta_t).clamp(min=0.0)
+                _, xt_sem_enc, _ = self.path_sampler.plan(t_sem_enc, x0_sem, x1_sem)
+                _, xt_tex_enc, _ = self.path_sampler.plan(t_tex_enc, x0_tex, x1_tex)
+                xt_encode = th.cat([xt_tex_enc, xt_sem_enc], dim=1)
+                t_encode_img_for_model = (t_tex_enc, t_sem_enc)
+                t_sem_den = (t_denoise_raw * (1 + self.semfirst_delta_t)).clamp(max=1.0)
+                t_tex_den = (t_sem_den - self.semfirst_delta_t).clamp(min=0.0)
+                t_sem_den, xt_sem, ut_sem = self.path_sampler.plan(t_sem_den, x0_sem, x1_sem)
+                t_tex_den, xt_tex, ut_tex = self.path_sampler.plan(t_tex_den, x0_tex, x1_tex)
+                t_img_for_model = (t_tex_den, t_sem_den)
+                xt_img = th.cat([xt_tex, xt_sem], dim=1)
+                ut_img = th.cat([ut_tex, ut_sem], dim=1)
+            else:
+                _, xt_encode, _ = self.path_sampler.plan(t_encode_raw, x0_img, x1)
+                t_encode_img_for_model = t_encode_raw
+                t_denoise_raw, xt_img, ut_img = self.path_sampler.plan(t_denoise_raw, x0_img, x1)
+                t_img_for_model = t_denoise_raw
+            t_img = t_denoise_raw
+        else:
+            t_encode_img = th.ones(B, device=device)
+            if self.semfirst_delta_t > 0:
+                t_encode_img_for_model = (t_encode_img, t_encode_img)
+            else:
+                t_encode_img_for_model = t_encode_img
+            xt_encode = x1
+
+        # Use unwrapped model for Pass 1
+        pass1_out = m(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
+                      t_hidden=t_encode_hid, **model_kwargs)
+        h_velocity = pass1_out[1]
+        h_clean = x0_h + h_velocity  # reconstruct clean encoding
+
+        # Regularization: penalize hidden token norms deviating from unit sphere
+        if hidden_reg_weight > 0:
+            h_radius = h_clean.norm(dim=-1)  # (B, num_hidden_tokens)
+            hidden_reg_loss = (h_radius - 1).pow(2).mean()
+
+        # Project onto unit sphere
+        if normalize_hidden:
+            h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+
+        # ============ SAMPLE IMAGE NOISE ============
+        if not noisy_img_encode:
+            t_img, x0_img, x1_img = self.sample(x1, sp_timesteps, shifted_mu)
+
+            if self.semfirst_delta_t > 0:
+                t_sem = t_img * (1 + self.semfirst_delta_t)
+                t_tex = t_sem - self.semfirst_delta_t
+                t_sem = t_sem.clamp(max=1.0)
+                t_tex = t_tex.clamp(min=0.0)
+                x0_sem = x0_img[:, -self.semantic_chans:]
+                x0_tex = x0_img[:, :-self.semantic_chans]
+                x1_sem = x1_img[:, -self.semantic_chans:]
+                x1_tex = x1_img[:, :-self.semantic_chans]
+                t_sem, xt_sem, ut_sem = self.path_sampler.plan(t_sem, x0_sem, x1_sem)
+                t_tex, xt_tex, ut_tex = self.path_sampler.plan(t_tex, x0_tex, x1_tex)
+                t_img_for_model = (t_tex, t_sem)
+                xt_img = th.cat([xt_tex, xt_sem], dim=1)
+                ut_img = th.cat([ut_tex, ut_sem], dim=1)
+            else:
+                t_img, xt_img, ut_img = self.path_sampler.plan(t_img, x0_img, x1_img)
+                t_img_for_model = t_img
+
+        # ============ PASS 2: Merged image + hidden denoising ============
+        t0_h, t1_h = self.check_interval(self.train_eps, self.sample_eps)
+
+        if hidden_same_t_as_img:
+            t_h = t_img.clone().clamp(t0_h, t1_h)
+        elif hidden_t_shift != 0:
+            t_h = self.sample_logit_normal(hidden_t_shift, 1, size=B).to(device)
+            t_h = t_h * (t1_h - t0_h) + t0_h
+        else:
+            t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+        x0_h2 = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
+        
+        if hidden_grad_dyn_scale > 0.0:
+            h_clean = self.dyn_grad_scale(h_clean, t_h, hidden_grad_dyn_scale)
+
+        # Noise the encoding — grad flows through h_clean back to Pass 1
+        t_h_expanded = t_h.view(B, 1, 1)
+        xt_h = t_h_expanded * h_clean + (1 - t_h_expanded) * x0_h2
+
+        # Detached target: gradient from hidden MSE does NOT push on h_clean
+        # directly; it only reaches the encoder through h_pred → xt_h → h_clean.
+        h_clean_detached = h_clean.detach()
+        ut_h = h_clean_detached - x0_h2
+
+        # Single forward pass: predict image velocity + hidden velocity
+        if use_repa:
+            assert feature_dino is not None
+            img_pred, h_pred, repa_feat_proj = model(xt_img, t=t_img_for_model,
+                                                     x_hidden=xt_h, t_hidden=t_h,
+                                                     **model_kwargs)
+        else:
+            img_pred, h_pred = model(xt_img, t=t_img_for_model,
+                                     x_hidden=xt_h, t_hidden=t_h,
+                                     **model_kwargs)
+
+        # --- Image denoising loss ---
+        loss_per_channel = (img_pred - ut_img) ** 2
+        if self.semantic_chans > 0 and self.semantic_weight != 1.0:
+            ch_num = ut_img.shape[1]
+            regular_chans = ch_num - self.semantic_chans
+            regular_loss = loss_per_channel[:, :regular_chans]
+            semantic_loss = loss_per_channel[:, regular_chans:] * self.semantic_weight
+            total_img_loss = th.cat([regular_loss, semantic_loss], dim=1)
+            img_loss = mean_flat(total_img_loss)
+        else:
+            img_loss = mean_flat(loss_per_channel)
+
+        # --- Hidden denoising loss (target detached, prediction has grad) ---
+        hidden_loss = mean_flat((h_pred - ut_h) ** 2) * hidden_weight * hidden_loss_scale
+
+        # --- Optional cosine loss on single-step clean prediction ---
+        if hidden_cos_weight > 0:
+            h1_pred = xt_h + (1 - t_h_expanded) * h_pred
+            hidden_cos_loss = mean_flat(
+                1 - th.nn.functional.cosine_similarity(h1_pred, h_clean_detached, dim=-1)
+            ) * hidden_cos_weight * hidden_loss_scale
+        else:
+            hidden_cos_loss = None
+
+        # --- Assemble terms ---
+        terms = {}
+        terms['loss'] = img_loss
+        terms['pred'] = img_pred
+        terms['hidden_loss'] = hidden_loss
+        if hidden_cos_loss is not None:
+            terms['hidden_cos_loss'] = hidden_cos_loss
+
+        if self.use_cosine_loss:
+            terms['cos_loss'] = mean_flat(
+                1 - th.nn.functional.cosine_similarity(img_pred, ut_img, dim=1))
+
+        if use_repa:
+            feature_dino = einops.rearrange(feature_dino, 'b c h w -> b (h w) c')
+            if self.repa_mode == 'cos':
+                repa_loss = mean_flat(1 - th.nn.functional.cosine_similarity(
+                    feature_dino, repa_feat_proj, dim=-1))
+            elif self.repa_mode == 'mse':
+                repa_loss = mean_flat((feature_dino - repa_feat_proj) ** 2)
+            elif self.repa_mode == 'cos_mse':
+                cos_loss = mean_flat(1 - th.nn.functional.cosine_similarity(
+                    feature_dino, repa_feat_proj, dim=-1))
+                mse_loss = mean_flat((feature_dino - repa_feat_proj) ** 2)
+                repa_loss = (cos_loss + mse_loss) / 2
+            terms['repa_loss'] = repa_loss * self.repa_weight
+
         if hidden_reg_weight > 0:
             terms['hidden_reg_loss'] = hidden_reg_loss * hidden_reg_weight
 

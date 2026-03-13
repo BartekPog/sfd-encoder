@@ -46764,3 +46764,9 @@ Traceback (most recent call last):
   File "/dais/fs/scratch/bpogodzi/hidden-diffusion/sfd-encoder/.venv-sfd/lib64/python3.6/site-packages/requests/models.py", line 392, in prepare_url
     raise MissingSchema(error)
 requests.exceptions.MissingSchema: Invalid URL '/api/resolve-cache/models/SFD-Project/SFD/7ec7c1b272777b772b68da10ab06132204a060b2/.gitattributes?%2FSFD-Project%2FSFD%2Fresolve%2F7ec7c1b272777b772b68da10ab06132204a060b2%2F.gitattributes=&etag=%22fcdeaa3d5c9553993822662aa74fd4fec5a93c78%22': No scheme supplied. Perhaps you meant http:///api/resolve-cache/models/SFD-Project/SFD/7ec7c1b272777b772b68da10ab06132204a060b2/.gitattributes?%2FSFD-Project%2FSFD%2Fresolve%2F7ec7c1b272777b772b68da10ab06132204a060b2%2F.gitattributes=&etag=%22fcdeaa3d5c9553993822662aa74fd4fec5a93c78%22?
+Found 2229663 .png files in outputs/inference
+Deleting...
+Found 2229493 .png files in outputs/inference
+Deleting...
+Done. Removed 2229493 .png files.
+Cleaned up empty directories.

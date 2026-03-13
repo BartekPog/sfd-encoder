@@ -26,6 +26,7 @@ COLUMN_ORDER = [
     "sampler",
     "hidden_schedule_max_t",
     "hidden_sphere_clamp",
+    "encode_linear_start_t",
     # architecture
     "model_type",
     "use_hidden_tokens",

@@ -75,7 +75,8 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  steps_per_pass: int | None = None,
                  num_steps: int | None = None,
                  hidden_schedule_max_t: float | None = None,
-                 hidden_sphere_clamp: bool = False) -> Path | None:
+                 hidden_sphere_clamp: bool = False,
+                 encode_linear_start_t: float | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -116,6 +117,11 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                 matches = [m for m in matches if "-encodefirst" in m.parent.name]
             elif inference_type == "encodelinear":
                 matches = [m for m in matches if "-enclin" in m.parent.name]
+                if encode_linear_start_t is not None:
+                    tag = f"enclin{encode_linear_start_t:.2f}"
+                    st_matches = [m for m in matches if tag in m.parent.name]
+                    if st_matches:
+                        matches = st_matches
             else:
                 matches = [m for m in matches
                            if not m.parent.name.endswith("-twopass")
@@ -195,7 +201,8 @@ def main():
                            steps_per_pass=args.steps_per_pass,
                            num_steps=args.num_steps,
                            hidden_schedule_max_t=args.hidden_schedule_max_t,
-                           hidden_sphere_clamp=args.hidden_sphere_clamp)
+                           hidden_sphere_clamp=args.hidden_sphere_clamp,
+                           encode_linear_start_t=args.encode_linear_start_t)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None

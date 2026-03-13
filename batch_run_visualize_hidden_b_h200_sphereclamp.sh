@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-400000}
+CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings ----
@@ -28,7 +28,7 @@ CPUS_PER_TASK=4
 # ---- Hidden-token experiment definitions ----
 EXPERIMENTS=(
     # ---- V2 experiments ----
-    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
     # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
     # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
     # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
@@ -37,6 +37,8 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
     # # H16 — longer to train, include when checkpoint is ready
     # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc.yaml|v4_mse01_cos001_noisy_enc"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
 )
 
 echo "============================================="

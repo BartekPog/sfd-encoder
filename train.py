@@ -359,26 +359,67 @@ def do_train(train_config, accelerator):
                     hidden_reg_weight = train_config['model'].get('hidden_reg_weight', 0.01)
                     hidden_cos_weight = train_config['model'].get('hidden_cos_weight', 0.0)
                     hidden_same_t_as_img = train_config['model'].get('hidden_same_t_as_img', False)
+                    hidden_merged_passes = train_config['model'].get('hidden_merged_passes', False)
+                    noisy_img_encode = train_config['model'].get('noisy_img_encode', False)
 
-                    # backward_fn: called inside training_losses_hidden to backward
-                    # Pass 3's loss immediately, freeing its activations before Pass 2
-                    # runs. Uses no_sync to defer gradient sync to the main backward.
-                    def _hidden_backward_fn(loss):
-                        no_sync = getattr(model, 'no_sync', None)
-                        ctx = no_sync() if no_sync is not None else contextlib.nullcontext()
-                        with ctx:
-                            accelerator.backward(loss)
+                    # --- Hidden curriculum schedules ---
+                    # Schedule 1: hidden t_h bias (shifted logit-normal mu)
+                    h_shift_init = train_config['model'].get('hidden_t_shift_init', 0.0)
+                    h_shift_final = train_config['model'].get('hidden_t_shift_final', 0.0)
+                    h_shift_warmup = train_config['model'].get('hidden_t_shift_warmup', 0)
+                    if h_shift_warmup > 0 and train_steps < h_shift_warmup:
+                        alpha = train_steps / h_shift_warmup
+                        hidden_t_shift = h_shift_init * (1 - alpha) + h_shift_final * alpha
+                    else:
+                        hidden_t_shift = h_shift_final
 
-                    loss_dict = transport.training_losses_hidden(
-                        model, x, model_kwargs,
-                        use_repa=use_repa, feature_dino=feature_dino,
-                        hidden_weight=hidden_weight,
-                        normalize_hidden=normalize_hidden,
-                        hidden_reg_weight=hidden_reg_weight,
-                        hidden_cos_weight=hidden_cos_weight,
-                        backward_fn=_hidden_backward_fn,
-                        hidden_same_t_as_img=hidden_same_t_as_img,
-                    )
+                    # Schedule 2: hidden loss ramp (0 -> 1, for Pass 3 gating / merged loss scale)
+                    h_loss_start = train_config['model'].get('hidden_loss_warmup_start', 0)
+                    h_loss_end = train_config['model'].get('hidden_loss_warmup_end', 0)
+                    if h_loss_end > h_loss_start and train_steps < h_loss_end:
+                        hidden_loss_scale = max(0.0, min(1.0, (train_steps - h_loss_start) / (h_loss_end - h_loss_start)))
+                    else:
+                        hidden_loss_scale = 1.0
+
+                    if hidden_merged_passes:
+                        # 2-pass variant: merged image + hidden denoising,
+                        # hidden loss backpropagates into the encoder.
+                        loss_dict = transport.training_losses_hidden_merged(
+                            model, x, model_kwargs,
+                            use_repa=use_repa, feature_dino=feature_dino,
+                            hidden_weight=hidden_weight,
+                            normalize_hidden=normalize_hidden,
+                            hidden_reg_weight=hidden_reg_weight,
+                            hidden_cos_weight=hidden_cos_weight,
+                            hidden_same_t_as_img=hidden_same_t_as_img,
+                            noisy_img_encode=noisy_img_encode,
+                            hidden_t_shift=hidden_t_shift,
+                            hidden_loss_scale=hidden_loss_scale,
+                        )
+                    else:
+                        # 3-pass variant: detached hidden denoising (original)
+                        # backward_fn: called inside training_losses_hidden to backward
+                        # Pass 3's loss immediately, freeing its activations before Pass 2
+                        # runs. Uses no_sync to defer gradient sync to the main backward.
+                        def _hidden_backward_fn(loss):
+                            no_sync = getattr(model, 'no_sync', None)
+                            ctx = no_sync() if no_sync is not None else contextlib.nullcontext()
+                            with ctx:
+                                accelerator.backward(loss)
+
+                        loss_dict = transport.training_losses_hidden(
+                            model, x, model_kwargs,
+                            use_repa=use_repa, feature_dino=feature_dino,
+                            hidden_weight=hidden_weight,
+                            normalize_hidden=normalize_hidden,
+                            hidden_reg_weight=hidden_reg_weight,
+                            hidden_cos_weight=hidden_cos_weight,
+                            backward_fn=_hidden_backward_fn,
+                            hidden_same_t_as_img=hidden_same_t_as_img,
+                            noisy_img_encode=noisy_img_encode,
+                            hidden_t_shift=hidden_t_shift,
+                            hidden_loss_scale=hidden_loss_scale,
+                        )
                 else:
                     loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
                 # if 'cos_loss' in loss_dict:
@@ -461,6 +502,10 @@ def do_train(train_config, accelerator):
                             if 'hidden_reg_loss' in loss_dict:
                                 wandb_losses['hidden_reg_loss'] = loss_dict["hidden_reg_loss"].item()
                                 wandb_losses['total_loss'] += wandb_losses['hidden_reg_loss']
+                            # Log curriculum schedule values if active
+                            if use_hidden:
+                                wandb_losses['hidden_t_shift'] = hidden_t_shift
+                                wandb_losses['hidden_loss_scale'] = hidden_loss_scale
                             # print(wandb_losses)
                             wandb.log(wandb_losses, step=train_steps)
                     # Reset monitoring variables:
