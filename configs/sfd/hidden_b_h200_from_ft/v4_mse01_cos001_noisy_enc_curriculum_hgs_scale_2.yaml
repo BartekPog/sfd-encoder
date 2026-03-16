@@ -3,6 +3,7 @@
 #   (early: nearly clean hidden tokens in Pass 2 & 3; permanently mildly biased)
 # Hidden loss warmup: Pass 3 probability ramps 0 -> 1 between 20K and 50K steps
 #   (delays hidden denoising pressure until encoder produces useful representations)
+# hidden_grad_static_scale = 2 (constant 2x gradient boost to encoder)
 # Initialized from v2_finetune_no_hidden 1540K checkpoint
 # Target: 4x H200, batch/gpu=64, NO gradient accumulation
 # Effective batch size: 64 * 4 = 256
@@ -54,7 +55,7 @@ model:
   # Curriculum: hidden loss warmup (Pass 3 probability ramp)
   hidden_loss_warmup_start: 20000
   hidden_loss_warmup_end: 50000
-  hidden_grad_dyn_scale: 4.0
+  hidden_grad_static_scale: 2.0
 
 train:
   max_steps: 120000
@@ -62,7 +63,7 @@ train:
   grad_accum_steps: 1
   global_seed: 0
   output_dir: 'outputs/train'
-  exp_name: 'v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4'
+  exp_name: 'v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2'
   ckpt: null
   log_every: 10
   ckpt_every: 40000
@@ -99,11 +100,5 @@ sample:
   cfg_interval_start: 0
   timestep_shift: 0
 
-# wandb:
-#   tags:
-#     - noisy_img_encode
-#     - hidden_curriculum
-
-
 wandb:
-  tags: ["v4", "base", "H8", "mse01", "cos001", "shared_temb", "h200", "from_ft_1540k", "noisy_img_encode", "hidden_curriculum"]
+  tags: ["v4", "base", "H8", "mse01", "cos001", "shared_temb", "h200", "from_ft_1540k", "noisy_img_encode", "hidden_curriculum", "hgs_scale_2"]

@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-10}
+NUM_CHAINS=${1:-8}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -135,13 +135,30 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_curriculum.yaml "${NUM_CHAINS}" 2
 # echo ""
 
-echo ">>> V4-16: MSE 0.02 + cosine 0.005, merged + noisy_enc + curriculum — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc_curriculum.yaml "${NUM_CHAINS}" 2
+# echo ">>> V4-16: MSE 0.02 + cosine 0.005, merged + noisy_enc + curriculum — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc_curriculum.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-17: MSE 0.02 + cosine 0.005, 3-pass + curriculum 5 to 0.5 at 40K — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_5_05_40k.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+
+
+# echo ">>> V4-18: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgd_scale=4 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-19: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgd_scale=2 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_2.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+echo ">>> V4-20: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgs_scale=1.5 — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5.yaml "${NUM_CHAINS}" 2
 echo ""
 
-
-echo ">>> V4-17: MSE 0.02 + cosine 0.005, 3-pass + curriculum 5 to 0.5 at 40K — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_5_05_40k.yaml "${NUM_CHAINS}" 2
+echo ">>> V4-21: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgs_scale=2 — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2.yaml "${NUM_CHAINS}" 2
 echo ""
 
 

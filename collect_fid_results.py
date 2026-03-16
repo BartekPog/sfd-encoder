@@ -40,6 +40,15 @@ COLUMN_ORDER = [
     "hidden_reg_weight",
     "hidden_same_t_as_img",
     "normalize_hidden",
+    "noisy_img_encode",
+    # hidden curriculum / gradient scaling
+    "hidden_grad_dyn_scale",
+    "hidden_grad_static_scale",
+    "hidden_t_shift_init",
+    "hidden_t_shift_final",
+    "hidden_t_shift_warmup",
+    "hidden_loss_warmup_start",
+    "hidden_loss_warmup_end",
     # REPA
     "use_repa",
     "repa_weight",

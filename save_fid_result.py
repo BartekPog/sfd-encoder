@@ -48,6 +48,15 @@ CONFIG_FIELDS = {
     "model.hidden_reg_weight":        ("hidden_reg_weight",         None),
     "model.hidden_same_t_as_img":     ("hidden_same_t_as_img",      False),
     "model.normalize_hidden":         ("normalize_hidden",          True),
+    "model.noisy_img_encode":         ("noisy_img_encode",          False),
+    # hidden curriculum / gradient scaling
+    "model.hidden_grad_dyn_scale":    ("hidden_grad_dyn_scale",     None),
+    "model.hidden_grad_static_scale": ("hidden_grad_static_scale",  None),
+    "model.hidden_t_shift_init":      ("hidden_t_shift_init",       None),
+    "model.hidden_t_shift_final":     ("hidden_t_shift_final",      None),
+    "model.hidden_t_shift_warmup":    ("hidden_t_shift_warmup",     None),
+    "model.hidden_loss_warmup_start": ("hidden_loss_warmup_start",  None),
+    "model.hidden_loss_warmup_end":   ("hidden_loss_warmup_end",    None),
     # REPA
     "model.use_repa":                 ("use_repa",                  False),
     "model.repa_weight":              ("repa_weight",               None),

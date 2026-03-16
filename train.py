@@ -361,6 +361,8 @@ def do_train(train_config, accelerator):
                     hidden_same_t_as_img = train_config['model'].get('hidden_same_t_as_img', False)
                     hidden_merged_passes = train_config['model'].get('hidden_merged_passes', False)
                     noisy_img_encode = train_config['model'].get('noisy_img_encode', False)
+                    hidden_grad_dyn_scale = train_config['model'].get('hidden_grad_dyn_scale', 0.0)
+                    hidden_grad_static_scale = train_config['model'].get('hidden_grad_static_scale', 1.0)
 
                     # --- Hidden curriculum schedules ---
                     # Schedule 1: hidden t_h bias (shifted logit-normal mu)
@@ -395,6 +397,8 @@ def do_train(train_config, accelerator):
                             noisy_img_encode=noisy_img_encode,
                             hidden_t_shift=hidden_t_shift,
                             hidden_loss_scale=hidden_loss_scale,
+                            hidden_grad_dyn_scale=hidden_grad_dyn_scale,
+                            hidden_grad_static_scale=hidden_grad_static_scale,
                         )
                     else:
                         # 3-pass variant: detached hidden denoising (original)
@@ -419,6 +423,8 @@ def do_train(train_config, accelerator):
                             noisy_img_encode=noisy_img_encode,
                             hidden_t_shift=hidden_t_shift,
                             hidden_loss_scale=hidden_loss_scale,
+                            hidden_grad_dyn_scale=hidden_grad_dyn_scale,
+                            hidden_grad_static_scale=hidden_grad_static_scale,
                         )
                 else:
                     loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
@@ -506,6 +512,10 @@ def do_train(train_config, accelerator):
                             if use_hidden:
                                 wandb_losses['hidden_t_shift'] = hidden_t_shift
                                 wandb_losses['hidden_loss_scale'] = hidden_loss_scale
+                                if hidden_grad_dyn_scale > 0:
+                                    wandb_losses['hidden_grad_dyn_scale'] = hidden_grad_dyn_scale
+                                if hidden_grad_static_scale != 1.0:
+                                    wandb_losses['hidden_grad_static_scale'] = hidden_grad_static_scale
                             # print(wandb_losses)
                             wandb.log(wandb_losses, step=train_steps)
                     # Reset monitoring variables:

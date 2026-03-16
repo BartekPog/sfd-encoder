@@ -1,6 +1,8 @@
 import torch as th
 import numpy as np
 import logging
+from jaxtyping import Float 
+from torch import Tensor 
 
 import enum
 import einops
@@ -191,12 +193,15 @@ class Transport:
 
         t = t.to(x1)
         return t, x0, x1
+
+    def grad_scale(self, x: Float[Tensor, "b c h w"], scale: Float[Tensor, "b c h w"] | float) -> Float[Tensor, "b c h w"]:
+        return x * scale - (scale - 1) * x.detach()
     
     def dyn_grad_scale(self, h_clean, t_h, hidden_grad_dyn_scale, eps=1e-4):
         inverted_scale = (1/(hidden_grad_dyn_scale + eps))
 
         weight_t = (1+inverted_scale) / (t_h + inverted_scale)
-        return h_clean * weight_t.view(-1, 1, 1) - (1 - weight_t).view(-1, 1, 1) * h_clean.detach()
+        return self.grad_scale(h_clean, weight_t.view(-1, 1, 1))
     
 
     def training_losses(
@@ -333,6 +338,7 @@ class Transport:
         hidden_t_shift=0.0,
         hidden_loss_scale=1.0,
         hidden_grad_dyn_scale=0.0,
+        hidden_grad_static_scale=1.0,
     ):
         """
         Self-encoder training loss with hidden tokens (3-pass variant).
@@ -570,6 +576,9 @@ class Transport:
         if hidden_grad_dyn_scale > 0.0:
             h_clean = self.dyn_grad_scale(h_clean, t_h, hidden_grad_dyn_scale)
 
+        if hidden_grad_static_scale != 1.0:
+            h_clean = self.grad_scale(h_clean, hidden_grad_static_scale)
+
         # Noise the encoding (gradient flows through h_clean from Pass 1!)
         t_h_expanded = t_h.view(B, 1, 1)
         xt_h = t_h_expanded * h_clean + (1 - t_h_expanded) * x0_h2  # linear interpolation
@@ -641,6 +650,8 @@ class Transport:
         noisy_img_encode=False,
         hidden_t_shift=0.0,
         hidden_loss_scale=1.0,
+        hidden_grad_dyn_scale=0.0,
+        hidden_grad_static_scale=1.0, 
     ):
         """
         Two-pass self-encoder training with merged image + hidden denoising.
@@ -805,6 +816,9 @@ class Transport:
         
         if hidden_grad_dyn_scale > 0.0:
             h_clean = self.dyn_grad_scale(h_clean, t_h, hidden_grad_dyn_scale)
+
+        if hidden_grad_static_scale != 1.0:
+            h_clean = self.grad_scale(h_clean, hidden_grad_static_scale)
 
         # Noise the encoding — grad flows through h_clean back to Pass 1
         t_h_expanded = t_h.view(B, 1, 1)

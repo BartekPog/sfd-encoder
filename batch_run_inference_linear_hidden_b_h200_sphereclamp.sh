@@ -56,8 +56,15 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc.yaml|v4_mse01_cos001_merged_noisy_enc"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml|v4_mse002_cos0005_merged_noisy_enc"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc_curriculum.yaml|v4_mse01_cos001_merged_noisy_enc_curriculum"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc.yaml|v4_mse01_cos001_noisy_enc"
+
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_2.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_2"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
+
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum.yaml|v4_mse002_cos0005_curriculum"
+
 )
 
 echo "============================================="
