@@ -57,6 +57,7 @@ CONFIG_FIELDS = {
     "model.hidden_t_shift_warmup":    ("hidden_t_shift_warmup",     None),
     "model.hidden_loss_warmup_start": ("hidden_loss_warmup_start",  None),
     "model.hidden_loss_warmup_end":   ("hidden_loss_warmup_end",    None),
+    "model.use_encode_mode_emb":      ("use_encode_mode_emb",       False),
     # REPA
     "model.use_repa":                 ("use_repa",                  False),
     "model.repa_weight":              ("repa_weight",               None),
@@ -85,7 +86,8 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  num_steps: int | None = None,
                  hidden_schedule_max_t: float | None = None,
                  hidden_sphere_clamp: bool = False,
-                 encode_linear_start_t: float | None = None) -> Path | None:
+                 encode_linear_start_t: float | None = None,
+                 encode_fixed_start_t: float | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -131,11 +133,19 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     st_matches = [m for m in matches if tag in m.parent.name]
                     if st_matches:
                         matches = st_matches
+            elif inference_type == "encodefixed":
+                matches = [m for m in matches if "-encfix" in m.parent.name]
+                if encode_fixed_start_t is not None:
+                    tag = f"encfix{encode_fixed_start_t:.2f}"
+                    st_matches = [m for m in matches if tag in m.parent.name]
+                    if st_matches:
+                        matches = st_matches
             else:
                 matches = [m for m in matches
                            if not m.parent.name.endswith("-twopass")
                            and "-encodefirst" not in m.parent.name
-                           and "-enclin" not in m.parent.name]
+                           and "-enclin" not in m.parent.name
+                           and "-encfix" not in m.parent.name]
                 # Filter by num_steps encoded in folder name
                 if num_steps and len(matches) > 1:
                     step_matches = [m for m in matches
@@ -185,7 +195,7 @@ def main():
     parser.add_argument("--ckpt_step",      required=True, type=int,
                         help="Checkpoint step that was evaluated")
     parser.add_argument("--inference_type", required=True,
-                        choices=["linear", "twopass", "standard", "encodefirst", "encodelinear"],
+                        choices=["linear", "twopass", "standard", "encodefirst", "encodelinear", "encodefixed"],
                         help="Inference mode")
     parser.add_argument("--sampler",        default="euler")
     parser.add_argument("--num_steps",      type=int, default=100,
@@ -199,6 +209,8 @@ def main():
                         help="Set if inference was run with --hidden_sphere_clamp.")
     parser.add_argument("--encode_linear_start_t", type=float, default=None,
                         help="Start timestep for encode-linear mode (e.g. 0.50).")
+    parser.add_argument("--encode_fixed_start_t", type=float, default=None,
+                        help="Start timestep for encode-fixed mode (e.g. 0.50).")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -211,7 +223,8 @@ def main():
                            num_steps=args.num_steps,
                            hidden_schedule_max_t=args.hidden_schedule_max_t,
                            hidden_sphere_clamp=args.hidden_sphere_clamp,
-                           encode_linear_start_t=args.encode_linear_start_t)
+                           encode_linear_start_t=args.encode_linear_start_t,
+                           encode_fixed_start_t=args.encode_fixed_start_t)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -238,6 +251,7 @@ def main():
         "hidden_schedule_max_t":  args.hidden_schedule_max_t,
         "hidden_sphere_clamp":    args.hidden_sphere_clamp,
         "encode_linear_start_t":  args.encode_linear_start_t,
+        "encode_fixed_start_t":   args.encode_fixed_start_t,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

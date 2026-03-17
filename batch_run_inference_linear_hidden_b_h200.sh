@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-1700000} 
+CKPT_STEP=${1:-1620000} 
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----

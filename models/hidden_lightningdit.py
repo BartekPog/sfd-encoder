@@ -24,6 +24,7 @@ class HiddenLightningDiT(LightningDiT):
         use_per_token_encoding: bool=True, 
         share_patch_embedder: bool=True,
         share_timestep_embedder: bool=False,
+        use_encode_mode_emb: bool=False,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -46,7 +47,16 @@ class HiddenLightningDiT(LightningDiT):
         if not share_timestep_embedder:
             self.t_embedder_hid = TimestepEmbedder(self.hidden_size)
 
-        
+        # Optional mode embedding: zero-initialized vector added to the adaLN
+        # conditioning signal during encoding (Pass 1) so the model can softly
+        # distinguish "encoder" from "denoiser" mode.  Starts at zero for
+        # checkpoint compatibility; learns during fine-tuning.
+        self.use_encode_mode_emb = use_encode_mode_emb
+        if use_encode_mode_emb:
+            self.encode_mode_emb = nn.Parameter(torch.zeros(self.hidden_size))
+        else:
+            self.encode_mode_emb = None
+
         # Create positional  embedding for the hidden tokens if we don't use per token encoding
         if not use_per_token_encoding:
             self.pos_emb_hid = nn.Parameter(torch.randn(1, self.num_hidden_tokens, self.hidden_size))
@@ -79,6 +89,8 @@ class HiddenLightningDiT(LightningDiT):
             nn.init.normal_(self.pos_emb_hid, std=0.02)
         if self.h_embedding is not None:
             nn.init.normal_(self.h_embedding, std=0.02) 
+        if self.encode_mode_emb is not None:
+            nn.init.zeros_(self.encode_mode_emb)
     
     def embed_hidden_tokens(self, hidden_tokens: Float[Tensor, "B N input_h_dim"]) -> Float[Tensor, "B N hidden_dim"]:
         if hasattr(self, 'x_embedder_hid'):
@@ -132,7 +144,8 @@ class HiddenLightningDiT(LightningDiT):
         
         return _HiddenSafeRoPE(n_img, freqs_cos, freqs_sin)
 
-    def forward(self, x, t=None, y=None, x_hidden=None, t_hidden=None):
+    def forward(self, x, t=None, y=None, x_hidden=None, t_hidden=None,
+                encode_mode=False):
         """
         Forward pass of HiddenLightningDiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -140,6 +153,9 @@ class HiddenLightningDiT(LightningDiT):
         y: (N,) tensor of class labels
         x_hidden: (N, num_hidden_tokens, hidden_token_dim) tensor of hidden token inputs
         t_hidden: (N,) tensor of timesteps for hidden tokens
+        encode_mode: if True and use_encode_mode_emb is enabled, adds a learnable
+            mode embedding to the adaLN conditioning vector so the model can
+            distinguish encoder (Pass 1) from denoiser (Pass 2/3) mode.
         """
         # Backward compatibility: no hidden tokens -> use base class forward
         if x_hidden is None:
@@ -189,6 +205,9 @@ class HiddenLightningDiT(LightningDiT):
         c_img = (t_main + y).unsqueeze(1).expand(-1, num_image_tokens, -1)           # (N, T_img, D)
         c_hid = (t_hid_emb + y).unsqueeze(1).expand(-1, self.num_hidden_tokens, -1)  # (N, N_hid, D)
         c = torch.cat([c_img, c_hid], dim=1)                                          # (N, T_img+N_hid, D)
+
+        if encode_mode and self.encode_mode_emb is not None:
+            c = c + self.encode_mode_emb  # broadcasts (D,) over (N, T_img+N_hid, D)
 
         for idx, block in enumerate(self.blocks):
             if use_checkpoint:

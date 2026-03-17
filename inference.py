@@ -117,7 +117,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
               fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
               hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False,
-              encode_first_pass=False, encode_linear_start_t=None):
+              encode_first_pass=False, encode_linear_start_t=None,
+              encode_fixed_start_t=None):
     """
     Run sampling.
     """
@@ -216,6 +217,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += "-encodefirst"
     if encode_linear_start_t is not None:
         folder_name += f"-enclin{encode_linear_start_t:.2f}"
+    if encode_fixed_start_t is not None:
+        folder_name += f"-encfix{encode_fixed_start_t:.2f}"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
@@ -242,6 +245,12 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             if accelerator.process_index == 0:
                 os.makedirs(sample_folder_dir, exist_ok=True)
         else:
+            # Skip if FID was already computed (PNGs may have been cleaned up)
+            fid_result_path = os.path.join(sample_folder_dir, "fid_result.txt")
+            if os.path.exists(fid_result_path):
+                if accelerator.process_index == 0:
+                    print_with_prefix(f"FID already computed at {fid_result_path}, skip sampling.")
+                return [sample_folder_dir]
             png_files = [f for f in os.listdir(sample_folder_dir) if f.endswith('.png')]
             png_count = len(png_files)
             if png_count > train_config['sample']['fid_num']:
@@ -470,7 +479,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
     # --- Encode-based modes: encode_first_pass (fixed) or encode_linear (partial denoise) ---
     sample_fn_encode_gen = None
     sample_fn_encode_linear = None
-    _needs_encode_setup = encode_first_pass or encode_linear_start_t is not None
+    sample_fn_encode_fixed = None
+    _needs_encode_setup = encode_first_pass or encode_linear_start_t is not None or encode_fixed_start_t is not None
     if _needs_encode_setup:
         assert use_hidden and use_semantic_first, "Encode modes require hidden tokens and semantic-first mode"
         common_ode_kwargs = dict(
@@ -494,6 +504,11 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             sample_fn_encode_linear = sampler.sample_ode_semantic_first_hidden(
                 **common_ode_kwargs, hidden_schedule="encode_linear",
                 hidden_schedule_start_t=encode_linear_start_t,
+                hidden_sphere_clamp=hidden_sphere_clamp,
+            )
+        if encode_fixed_start_t is not None:
+            sample_fn_encode_fixed = sampler.sample_ode_semantic_first_hidden(
+                **common_ode_kwargs, hidden_schedule="fixed",
                 hidden_sphere_clamp=hidden_sphere_clamp,
             )
         # Build class → dataset-index mapping by reading labels from each shard
@@ -529,6 +544,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 print_with_prefix('Encode-first mode: encode real images → fixed hidden → generate')
             if encode_linear_start_t is not None:
                 print_with_prefix(f'Encode-linear mode: encode → noisy h_init (start_t={encode_linear_start_t:.2f}) → linear denoise')
+            if encode_fixed_start_t is not None:
+                print_with_prefix(f'Encode-fixed mode: encode → noisy h_init (start_t={encode_fixed_start_t:.2f}) → fixed hidden → generate')
 
     if vae is None:
         vae = VA_VAE(
@@ -774,6 +791,56 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                     model_fn = model.forward
 
                 samples = sample_fn_encode_linear(z, model_fn, _z_hidden=h_init, **model_kwargs)[-1]
+            elif encode_fixed_start_t is not None:
+                # --- Encode-fixed mode ---
+                # Same class-matched encoding as encode-first, but noise h_clean
+                # to level start_t and hold the noisy hidden tokens fixed.
+                if fixed_class_label is not None:
+                    y = torch.tensor([fixed_class_label] * n, device=device)
+                elif use_balanced_sampling:
+                    y_list = []
+                    for sample_idx in range(n):
+                        global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
+                        if global_index >= fid_num:
+                            y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
+                        else:
+                            y_list.append(balanced_labels[global_index:global_index+1])
+                    y = torch.cat(y_list, dim=0)
+                else:
+                    y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
+
+                x1_list = []
+                for lbl_tensor in y:
+                    lbl = int(lbl_tensor.item())
+                    indices = enc_cls2idx[lbl]
+                    ptr = enc_cls_ptr[lbl]
+                    dataset_idx = indices[ptr % len(indices)]
+                    enc_cls_ptr[lbl] = ptr + 1
+                    item = encode_dataset[dataset_idx]
+                    x1_list.append(item[0])
+                x1_real = torch.stack(x1_list, dim=0).to(device)
+
+                normalize_hidden = train_config['model'].get('normalize_hidden', True)
+                h_clean = encode_hidden_from_image(
+                    model, x1_real, y, semfirst_delta_t, normalize_hidden, device)
+
+                # Noise h_clean to level start_t, then hold fixed
+                h_noise = torch.randn_like(h_clean)
+                h_init = encode_fixed_start_t * h_clean + (1.0 - encode_fixed_start_t) * h_noise
+
+                if using_cfg:
+                    z = torch.cat([z, z], 0)
+                    y_null = torch.tensor([1000] * n, device=device)
+                    y_cfg = torch.cat([y, y_null], 0)
+                    model_kwargs = dict(y=y_cfg, cfg_scale=cfg_scale, cfg_interval=True,
+                                       cfg_interval_start=cfg_interval_start)
+                    model_fn = model.forward_with_cfg
+                    h_init = torch.cat([h_init, h_init], 0)
+                else:
+                    model_kwargs = dict(y=y)
+                    model_fn = model.forward
+
+                samples = sample_fn_encode_fixed(z, model_fn, _z_hidden=h_init, **model_kwargs)[-1]
             else:
                 # Get labels (fixed, balanced, or random)
                 if fixed_class_label is not None:
@@ -888,6 +955,13 @@ if __name__ == "__main__":
                         help='Encode-linear mode: encode GT hidden tokens from real images, add noise '
                              'to level start_t, then linearly denoise hidden from start_t to 1.0 during '
                              'image generation. Sweep values like 0.3, 0.5, 0.7, 0.9.')
+    parser.add_argument('--encode_fixed_start_t', type=float, default=None,
+                        help='Encode-fixed mode: encode GT hidden tokens from real images, add noise '
+                             'to level start_t, then hold the noisy hidden tokens fixed during image '
+                             'generation (no hidden denoising). Sweep values like 0.3, 0.5, 0.7, 1.0.')
+    parser.add_argument('--no_cleanup_samples', action='store_true', default=False,
+                        help='Keep PNG sample files after FID calculation. By default, PNGs are '
+                             'deleted after FID is computed to save disk space.')
     args, unknown = parser.parse_known_args()
     accelerator = Accelerator()
     train_config = load_config(args.config)
@@ -923,6 +997,8 @@ if __name__ == "__main__":
     _hidden_kwargs = {}
     if 'share_timestep_embedder' in train_config['model']:
         _hidden_kwargs['share_timestep_embedder'] = train_config['model']['share_timestep_embedder']
+    if train_config['model'].get('use_encode_mode_emb', False):
+        _hidden_kwargs['use_encode_mode_emb'] = True
     model = gen_models[train_config['model']['model_type']](
         input_size=latent_size,
         class_dropout_prob=train_config['model']['class_dropout_prob'] if 'class_dropout_prob' in train_config['model'] else 0.1,
@@ -964,7 +1040,8 @@ if __name__ == "__main__":
         two_pass=args.two_pass,
         hidden_sphere_clamp=args.hidden_sphere_clamp,
         encode_first_pass=args.encode_first_pass,
-        encode_linear_start_t=args.encode_linear_start_t)
+        encode_linear_start_t=args.encode_linear_start_t,
+        encode_fixed_start_t=args.encode_fixed_start_t)
 
     if not args.demo and args.calculate_fid:
         # calculate FID
@@ -991,4 +1068,11 @@ if __name__ == "__main__":
                 # Log FID to wandb
                 if enable_wandb:
                     wandb.log({'FID': fid})
+                # Clean up PNG files to save disk space
+                if not args.no_cleanup_samples:
+                    import glob as _glob
+                    png_files = _glob.glob(os.path.join(sample_folder_dir, "*.png"))
+                    for f in png_files:
+                        os.remove(f)
+                    print_with_prefix(f"Cleaned up {len(png_files)} PNG files from {sample_folder_dir}")
         accelerator.wait_for_everyone()

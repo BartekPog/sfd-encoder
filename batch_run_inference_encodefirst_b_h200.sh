@@ -39,15 +39,15 @@ INFERENCE_OUTPUT_DIR="outputs/inference"
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
 EXPERIMENTS=(
     # ---- V2 experiments ----
-    "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
-    "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
-    "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
-    "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
-    "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
-    "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
-    "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
+    # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
+    # "configs/sfd/hidden_b_h200/v2_mse01_cos01.yaml|v2_mse01_cos01"
+    # "configs/sfd/hidden_b_h200/v2_mse01_cos01_same_t.yaml|v2_mse01_cos01_same_t"
+    # "configs/sfd/hidden_b_h200/v2_mse02_cos02.yaml|v2_mse02_cos02"
+    # "configs/sfd/hidden_b_h200/v2_cos02.yaml|v2_cos02"
+    # "configs/sfd/hidden_b_h200/v2_nonshr_temb_mse01_cos01.yaml|v2_nonshr_temb_mse01_cos01"
+    # "configs/sfd/hidden_b_h200/v2_sep_embedder_mse02.yaml|v2_sep_embedder_mse02"
     # H16
-    "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
+    # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
     # ---- V4 experiments (from v2_finetune_no_hidden/1540000.pt) ----
     # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
     # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"

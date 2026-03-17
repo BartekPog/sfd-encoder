@@ -27,6 +27,7 @@ COLUMN_ORDER = [
     "hidden_schedule_max_t",
     "hidden_sphere_clamp",
     "encode_linear_start_t",
+    "encode_fixed_start_t",
     # architecture
     "model_type",
     "use_hidden_tokens",
@@ -49,6 +50,7 @@ COLUMN_ORDER = [
     "hidden_t_shift_warmup",
     "hidden_loss_warmup_start",
     "hidden_loss_warmup_end",
+    "use_encode_mode_emb",
     # REPA
     "use_repa",
     "repa_weight",

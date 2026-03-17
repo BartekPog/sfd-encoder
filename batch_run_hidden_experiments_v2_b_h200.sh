@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-8}
+NUM_CHAINS=${1:-6}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -153,14 +153,33 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_2.yaml "${NUM_CHAINS}" 2
 # echo ""
 
-echo ">>> V4-20: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgs_scale=1.5 — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5.yaml "${NUM_CHAINS}" 2
+# echo ">>> V4-20: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgs_scale=1.5 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-21: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgs_scale=2 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+echo ">>> V4-22: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + encode_mode_emb — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb.yaml "${NUM_CHAINS}" 2
 echo ""
 
-echo ">>> V4-21: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgs_scale=2 — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2.yaml "${NUM_CHAINS}" 2
+# echo ">>> V4-23: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + encode_mode_emb + hgd_scale=4 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_hgd_scale_4.yaml "${NUM_CHAINS}" 2
+# echo "" CANCELLED FOR NOW
+
+echo ">>> V4-24: MSE 0.02 + cosine 0.005, 3-pass + curriculum + encode_mode_emb (no noisy enc) — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_enc_mode_emb.yaml "${NUM_CHAINS}" 2
 echo ""
 
+echo ">>> V4-25: MSE 0.02 + cosine 0.005, merged + noisy_enc — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml "${NUM_CHAINS}" 2
+echo ""
+
+echo ">>> V4-26: MSE 0.02 + cosine 0.005, merged + noisy_enc + curriculum — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc_curriculum.yaml "${NUM_CHAINS}" 2
+echo ""
 
 echo "============================================="
 echo "  All V2/V4 experiments submitted!"

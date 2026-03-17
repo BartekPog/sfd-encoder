@@ -339,6 +339,7 @@ class Transport:
         hidden_loss_scale=1.0,
         hidden_grad_dyn_scale=0.0,
         hidden_grad_static_scale=1.0,
+        use_encode_mode_emb=False,
     ):
         """
         Self-encoder training loss with hidden tokens (3-pass variant).
@@ -463,7 +464,8 @@ class Transport:
             xt_encode = x1  # clean image
 
         pass1_out = m(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
-                      t_hidden=t_encode_hid, **model_kwargs)
+                      t_hidden=t_encode_hid,
+                      encode_mode=use_encode_mode_emb, **model_kwargs)
         h_velocity = pass1_out[1]
         h_clean = x0_h + h_velocity
 
@@ -651,7 +653,8 @@ class Transport:
         hidden_t_shift=0.0,
         hidden_loss_scale=1.0,
         hidden_grad_dyn_scale=0.0,
-        hidden_grad_static_scale=1.0, 
+        hidden_grad_static_scale=1.0,
+        use_encode_mode_emb=False,
     ):
         """
         Two-pass self-encoder training with merged image + hidden denoising.
@@ -767,7 +770,8 @@ class Transport:
 
         # Use unwrapped model for Pass 1
         pass1_out = m(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
-                      t_hidden=t_encode_hid, **model_kwargs)
+                      t_hidden=t_encode_hid,
+                      encode_mode=use_encode_mode_emb, **model_kwargs)
         h_velocity = pass1_out[1]
         h_clean = x0_h + h_velocity  # reconstruct clean encoding
 

@@ -46770,3 +46770,5 @@ Found 2229493 .png files in outputs/inference
 Deleting...
 Done. Removed 2229493 .png files.
 Cleaned up empty directories.
+Found 1700000 .png files in outputs/inference
+Dry run. Re-run with --delete to actually remove them.
