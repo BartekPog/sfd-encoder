@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-120000}
+CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -36,7 +36,8 @@ PRECISION="bf16"
 INFERENCE_OUTPUT_DIR="outputs/inference"
 
 # ---- Start-t values to sweep ----
-START_T_VALUES=(0.0 0.1 0.3 0.5 0.6)
+START_T_VALUES=(0.0 0.1 0.3 0.5 0.6 0.8 1.0)
+# START_T_VALUES=(0.0 0.1 0.3 0.5 0.6)
 
 # ---- Hidden-token experiment definitions ----
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
@@ -53,11 +54,12 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200/v2_base_h16_mse02.yaml|v2_base_h16_mse02"
 
     # ---- V4 experiments (from v2_finetune_no_hidden/1540000.pt) ----
-    "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
     # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02.yaml|v4_base_h16_mse02"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_same_t.yaml|v4_mse01_cos001_same_t"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc.yaml|v4_mse01_cos001_merged_noisy_enc"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4"
 )
 
 echo "============================================="

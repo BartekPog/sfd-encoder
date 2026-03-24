@@ -366,6 +366,9 @@ def do_train(train_config, accelerator):
                     hidden_grad_dyn_scale = train_config['model'].get('hidden_grad_dyn_scale', 0.0)
                     hidden_grad_static_scale = train_config['model'].get('hidden_grad_static_scale', 1.0)
                     use_encode_mode_emb = train_config['model'].get('use_encode_mode_emb', False)
+                    hidden_guidance_scale = train_config['model'].get('hidden_guidance_scale', 1.0)
+                    hidden_reuse_noise_pass2 = train_config['model'].get('hidden_reuse_noise_pass2', False)
+                    hidden_reuse_noise_pass3 = train_config['model'].get('hidden_reuse_noise_pass3', False)
 
                     # --- Hidden curriculum schedules ---
                     # Schedule 1: hidden t_h bias (shifted logit-normal mu)
@@ -403,6 +406,9 @@ def do_train(train_config, accelerator):
                             hidden_grad_dyn_scale=hidden_grad_dyn_scale,
                             hidden_grad_static_scale=hidden_grad_static_scale,
                             use_encode_mode_emb=use_encode_mode_emb,
+                            hidden_guidance_scale=hidden_guidance_scale,
+                            hidden_reuse_noise_pass2=hidden_reuse_noise_pass2,
+                            hidden_reuse_noise_pass3=hidden_reuse_noise_pass3,
                         )
                     else:
                         # 3-pass variant: detached hidden denoising (original)
@@ -430,6 +436,9 @@ def do_train(train_config, accelerator):
                             hidden_grad_dyn_scale=hidden_grad_dyn_scale,
                             hidden_grad_static_scale=hidden_grad_static_scale,
                             use_encode_mode_emb=use_encode_mode_emb,
+                            hidden_guidance_scale=hidden_guidance_scale,
+                            hidden_reuse_noise_pass2=hidden_reuse_noise_pass2,
+                            hidden_reuse_noise_pass3=hidden_reuse_noise_pass3,
                         )
                 else:
                     loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
@@ -523,6 +532,8 @@ def do_train(train_config, accelerator):
                                     wandb_losses['hidden_grad_static_scale'] = hidden_grad_static_scale
                                 if use_encode_mode_emb:
                                     wandb_losses['use_encode_mode_emb'] = True
+                                if hidden_guidance_scale > 1.0:
+                                    wandb_losses['hidden_guidance_scale'] = hidden_guidance_scale
                             # print(wandb_losses)
                             wandb.log(wandb_losses, step=train_steps)
                     # Reset monitoring variables:

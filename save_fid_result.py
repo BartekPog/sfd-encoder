@@ -58,6 +58,7 @@ CONFIG_FIELDS = {
     "model.hidden_loss_warmup_start": ("hidden_loss_warmup_start",  None),
     "model.hidden_loss_warmup_end":   ("hidden_loss_warmup_end",    None),
     "model.use_encode_mode_emb":      ("use_encode_mode_emb",       False),
+    "model.hidden_guidance_scale":    ("hidden_guidance_scale",     None),
     # REPA
     "model.use_repa":                 ("use_repa",                  False),
     "model.repa_weight":              ("repa_weight",               None),

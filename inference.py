@@ -117,6 +117,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
               autoguidance_model_size=None, autoguidance_ckpt_iter=None, cfg_scale_sem=None, cfg_scale_tex=None,
               fid_num=None, num_sampling_steps=None, model=None, vae=None, demo_sample_mode=False,
               hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False,
+              hidden_rep_guidance=1.0,
               encode_first_pass=False, encode_linear_start_t=None,
               encode_fixed_start_t=None):
     """
@@ -211,6 +212,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += f"-hmaxt{hidden_schedule_max_t:.2f}"
     if hidden_sphere_clamp:
         folder_name += "-hsphereclamp"
+    if hidden_rep_guidance > 1.0:
+        folder_name += f"-hrg{hidden_rep_guidance:.1f}"
     if two_pass:
         folder_name += "-twopass"
     if encode_first_pass:
@@ -412,6 +415,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 hidden_schedule=hidden_schedule,
                 hidden_schedule_max_t=hidden_schedule_max_t,
                 hidden_sphere_clamp=hidden_sphere_clamp,
+                hidden_rep_guidance=hidden_rep_guidance,
             )
             if accelerator.process_index == 0:
                 print_with_prefix(f'Using Semantic First + Hidden ODE sampling with delta_t={semfirst_delta_t}, semantic_chans={semantic_chans}')
@@ -463,6 +467,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             semantic_chans=semantic_chans,
             num_hidden_tokens=model.num_hidden_tokens,
             hidden_token_dim=model.hidden_token_dim,
+            hidden_rep_guidance=hidden_rep_guidance,
         )
         sample_fn_pass1 = sampler.sample_ode_semantic_first_hidden(
             **common_ode_kwargs, hidden_schedule="linear",
@@ -494,6 +499,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             semantic_chans=semantic_chans,
             num_hidden_tokens=model.num_hidden_tokens,
             hidden_token_dim=model.hidden_token_dim,
+            hidden_rep_guidance=hidden_rep_guidance,
         )
         if encode_first_pass:
             sample_fn_encode_gen = sampler.sample_ode_semantic_first_hidden(
@@ -947,6 +953,10 @@ if __name__ == "__main__":
     parser.add_argument('--hidden_sphere_clamp', action='store_true', default=False,
                         help='At each hidden-token step, project the single-step clean prediction onto the unit sphere '
                              'token-wise before computing the velocity. Has no effect when hidden_schedule=fixed.')
+    parser.add_argument('--hidden_rep_guidance', type=float, default=1.0,
+                        help='Hidden representation guidance scale. >1.0 amplifies the image velocity in the '
+                             'direction away from the unconditional (no-hidden-info) prediction, using a '
+                             'linearly-ramped weight w(t_h)=1+(scale-1)*t_h. Default 1.0 (off).')
     parser.add_argument('--encode_first_pass', action='store_true', default=False,
                         help='Encode-then-generate mode: first pass encodes a real image from the dataset '
                              '(single forward step, like training Pass 1), second pass generates with the '
@@ -1039,6 +1049,7 @@ if __name__ == "__main__":
         hidden_schedule_max_t=args.hidden_schedule_max_t,
         two_pass=args.two_pass,
         hidden_sphere_clamp=args.hidden_sphere_clamp,
+        hidden_rep_guidance=args.hidden_rep_guidance,
         encode_first_pass=args.encode_first_pass,
         encode_linear_start_t=args.encode_linear_start_t,
         encode_fixed_start_t=args.encode_fixed_start_t)

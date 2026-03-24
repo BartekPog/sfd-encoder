@@ -10,19 +10,21 @@
 # extra column on the left.
 #
 # Usage:
-#   bash batch_run_visualize_hidden_encoded_b_h200.sh [ckpt_step]
+#   bash batch_run_visualize_hidden_encoded_b_h200.sh [ckpt_step] [hidden_rep_guidance]
 #
 # Arguments:
-#   ckpt_step  — checkpoint step to evaluate (default: 80000)
+#   ckpt_step            — checkpoint step to evaluate (default: 60000)
+#   hidden_rep_guidance  — hidden representation guidance scale (default: 1.0 = off)
 # =============================================================================
 
 set -euo pipefail
 
 CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
+HIDDEN_REP_GUIDANCE=${2:-2.0}
 
 # ---- SLURM settings ----
-TIME=${TIME:-"00-04:00:00"}
+TIME=${TIME:-"00-01:00:00"}
 NUM_GPUS=1
 GPUS="h200:${NUM_GPUS}"
 MEM="180G"
@@ -46,10 +48,13 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
     # New batch of V4
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc.yaml|v4_mse01_cos001_merged_noisy_enc"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc.yaml|v4_mse01_cos001_noisy_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc.yaml|v4_mse01_cos001_noisy_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_enc_mode_emb.yaml|v4_mse002_cos0005_curriculum_enc_mode_emb"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_merged_noisy_enc_curriculum.yaml|v4_mse01_cos001_merged_noisy_enc_curriculum"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
     # "configs/sfd/hidden_b_h200_from_ft/v4_base_h16_mse02_merged.yaml|v4_base_h16_mse02_merged"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5.yaml|v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5"
 )
 
 echo "============================================="
@@ -101,6 +106,11 @@ source ./.venv-sfd/bin/activate
 export TORCH_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/torch
 export HF_HOME=/dais/fs/scratch/bpogodzi/hidden-diffusion/cache/hf
 
+HRG_FLAG=""
+if (( \$(echo "${HIDDEN_REP_GUIDANCE} > 1.0" | bc -l) )); then
+    HRG_FLAG="--hidden_rep_guidance ${HIDDEN_REP_GUIDANCE}"
+fi
+
 python visualize_hidden_encoded.py \\
     --config ${CONFIG_PATH} \\
     --ckpt_path ${CKPT_PATH} \\
@@ -111,7 +121,7 @@ python visualize_hidden_encoded.py \\
     --cfg_scale 1.0 \\
     --seed 42 \\
     --output_dir outputs/visualizations/${TRAIN_EXP_NAME}_${CKPT_NAME} \\
-    --hidden_sphere_clamp
+    --hidden_sphere_clamp \${HRG_FLAG}
 
 echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
 SLURM_EOF

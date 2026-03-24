@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-6}
+NUM_CHAINS=${1:-4}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -161,28 +161,106 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2.yaml "${NUM_CHAINS}" 2
 # echo ""
 
-echo ">>> V4-22: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + encode_mode_emb — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb.yaml "${NUM_CHAINS}" 2
-echo ""
+# echo ">>> V4-22: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + encode_mode_emb — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb.yaml "${NUM_CHAINS}" 2
+# echo ""
 
 # echo ">>> V4-23: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + encode_mode_emb + hgd_scale=4 — from ft-1540k (4x H200)"
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_hgd_scale_4.yaml "${NUM_CHAINS}" 2
 # echo "" CANCELLED FOR NOW
 
-echo ">>> V4-24: MSE 0.02 + cosine 0.005, 3-pass + curriculum + encode_mode_emb (no noisy enc) — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_enc_mode_emb.yaml "${NUM_CHAINS}" 2
-echo ""
+# echo ">>> V4-24: MSE 0.02 + cosine 0.005, 3-pass + curriculum + encode_mode_emb (no noisy enc) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_enc_mode_emb.yaml "${NUM_CHAINS}" 2
+# echo ""
 
-echo ">>> V4-25: MSE 0.02 + cosine 0.005, merged + noisy_enc — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml "${NUM_CHAINS}" 2
-echo ""
+# echo ">>> V4-25: MSE 0.02 + cosine 0.005, merged + noisy_enc — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml "${NUM_CHAINS}" 2
+# echo ""
 
-echo ">>> V4-26: MSE 0.02 + cosine 0.005, merged + noisy_enc + curriculum — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc_curriculum.yaml "${NUM_CHAINS}" 2
+# echo ">>> V4-26: MSE 0.02 + cosine 0.005, merged + noisy_enc + curriculum — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc_curriculum.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-27: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hidden_guidance_1.5 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-28: MSE 0.1 + cosine 0.01, 3-pass + noisy_enc + curriculum + hgd_scale_4 + NO hidden denoise loss — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_no_hloss.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-29: MSE 0.1 + cosine 0.01, 3-pass + clean enc + curriculum + hgd_scale_4 — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_curriculum_hgd_scale_4.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# ---- V4.1: consistent hidden flow (Pass 1 & 3 share noise) ----
+
+# echo ">>> V4.1-1: MSE 0.1 + cosine 0.01, curriculum + hgd_scale_4 + repg_1.5 (consistent flow) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-2: MSE 0.1 + cosine 0.01, curriculum + repg_1.5 (consistent flow rerun) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-3: MSE 0.1 + cosine 0.01, base curriculum (consistent flow rerun) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-4: cosine 0.1 only, curriculum + repg_1.5 (consistent flow) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_cos01_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-5: MSE 0.1 only, curriculum + repg_1.5 (consistent flow) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-6: weak MSE 0.01 only, curriculum + repg_1.5 (consistent flow) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_mse001_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-7: MSE 0.1 + cosine 0.01, slow curriculum (60K warmup) + repg_1.5 (consistent flow) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum_slow_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4.1-8: NO hidden loss (weights=0), curriculum + hgd_scale_4 (consistent flow, correct no-hloss) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_1_noisy_enc_curriculum_hgd_scale_4_no_hloss.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# ---- V4 R3: Flow reuse for Pass 3, Resample for Pass 2 ----
+
+# echo ">>> V4-R3-1: MSE 0.1 + cosine 0.01, curriculum (reuse p3, resample p2) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-R3-2: NO hidden loss, curriculum + hgd_scale_4 (reuse p3, resample p2) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-R3-3: MSE 0.1 + cosine 0.01, curriculum + hgd_scale_4 + repg_1.5 (reuse p3, resample p2) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-R3-4: MSE 0.1 only, curriculum + repg_1.5 (reuse p3, resample p2) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_noisy_enc_curriculum_repg_1p5_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-R3-5: MSE 0.1 + cosine 0.01, curriculum + repg_1.5 (reuse p3, resample p2) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-R3-6: weak MSE 0.01 only, curriculum + repg_1.5 (reuse p3, resample p2) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+echo ">>> V4-R3-7: NO hidden loss, curriculum + repg_1.5 (reuse p3, resample p2, zero pass 3 compute) — from ft-1540k (4x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_repg_1p5_no_hloss_r3.yaml "${NUM_CHAINS}" 2
 echo ""
 
 echo "============================================="
-echo "  All V2/V4 experiments submitted!"
+echo "  All V2/V4/V4.1 experiments submitted!"
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="
+
+
 

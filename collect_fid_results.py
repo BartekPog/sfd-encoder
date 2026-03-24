@@ -51,6 +51,7 @@ COLUMN_ORDER = [
     "hidden_loss_warmup_start",
     "hidden_loss_warmup_end",
     "use_encode_mode_emb",
+    "hidden_guidance_scale",
     # REPA
     "use_repa",
     "repa_weight",

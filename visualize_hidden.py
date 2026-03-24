@@ -98,6 +98,10 @@ def main():
     parser.add_argument("--hidden_sphere_clamp", action="store_true", default=False,
                         help="Project each hidden token's single-step clean prediction onto the unit sphere "
                              "at every sampling step.")
+    parser.add_argument("--hidden_rep_guidance", type=float, default=1.0,
+                        help="Hidden representation guidance scale. >1.0 amplifies the model's "
+                             "response to hidden conditioning via a linearly-ramped CFG-like "
+                             "combination w(t_h) = 1 + (scale-1)*t_h. Default 1.0 (off).")
 
     args, unknown = parser.parse_known_args()
     train_config = OmegaConf.load(args.config)
@@ -199,10 +203,13 @@ def main():
         num_hidden_tokens=model.num_hidden_tokens,
         hidden_token_dim=model.hidden_token_dim,
         hidden_sphere_clamp=args.hidden_sphere_clamp,
+        hidden_rep_guidance=args.hidden_rep_guidance,
     )
 
     if args.hidden_sphere_clamp:
         print("Hidden sphere clamping: enabled")
+    if args.hidden_rep_guidance > 1.0:
+        print(f"Hidden representation guidance: scale={args.hidden_rep_guidance}")
 
     # Reference generation uses linear hidden schedule
     sample_fn_ref = sampler.sample_ode_semantic_first_hidden(
@@ -310,6 +317,8 @@ def main():
         grid_img = make_grid_image(grid_rows, row_labels=row_labels, col_labels=col_labels)
 
         suffix = "_sphereclamp" if args.hidden_sphere_clamp else ""
+        if args.hidden_rep_guidance > 1.0:
+            suffix += f"_hrg{args.hidden_rep_guidance:.1f}"
         save_path = os.path.join(output_dir, f"vis_{vis_idx:02d}_class{class_label}{suffix}.png")
         grid_img.save(save_path)
         print(f"  Saved: {save_path}")

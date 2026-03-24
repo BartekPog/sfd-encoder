@@ -19,11 +19,11 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-40000}
+CKPT_STEP=${1:-20000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
-TIME=${TIME:-"00-8:00:00"}
+TIME=${TIME:-"00-6:00:00"}
 NUM_GPUS=1
 GPUS="h200:${NUM_GPUS}"
 MEM="180G"
@@ -68,10 +68,29 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_strong_shift.yaml|v4_mse002_cos0005_curriculum_strong_shift"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml|v4_mse002_cos0005_merged_noisy_enc"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc_curriculum.yaml|v4_mse002_cos0005_merged_noisy_enc_curriculum"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb.yaml|v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5"
 
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_curriculum_enc_mode_emb.yaml|v4_mse002_cos0005_curriculum_enc_mode_emb"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb.yaml|v4_mse01_cos001_noisy_enc_curriculum_enc_mode_emb"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_2"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgs_scale_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5.yaml|v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_no_hloss.yaml|v4_no_hloss_noisy_enc_curriculum_hgd_scale_4"
+
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_cos01_noisy_enc_curriculum_repg_1p5.yaml|v4_1_cos01_noisy_enc_curriculum_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse001_noisy_enc_curriculum_repg_1p5.yaml|v4_1_mse001_noisy_enc_curriculum_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum.yaml|v4_1_mse01_cos001_noisy_enc_curriculum"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5.yaml|v4_1_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum_repg_1p5.yaml|v4_1_mse01_cos001_noisy_enc_curriculum_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_cos001_noisy_enc_curriculum_slow_repg_1p5.yaml|v4_1_mse01_cos001_noisy_enc_curriculum_slow_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_noisy_enc_curriculum_repg_1p5.yaml|v4_1_mse01_noisy_enc_curriculum_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_1_noisy_enc_curriculum_hgd_scale_4_no_hloss.yaml|v4_1_noisy_enc_curriculum_hgd_scale_4_no_hloss"
+
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_r3"
+    "configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3.yaml|v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse01_noisy_enc_curriculum_repg_1p5_r3"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse001_noisy_enc_curriculum_repg_1p5_r3"
 )
 
 echo "============================================="
