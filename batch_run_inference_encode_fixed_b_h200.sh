@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-100000}
+CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -40,7 +40,7 @@ INFERENCE_OUTPUT_DIR="outputs/inference"
 
 # ---- Start-t values to sweep ----
 # 1.0 = clean (same as encode_first_pass), 0.0 = pure noise (hidden tokens useless)
-START_T_VALUES=(0.0 0.1 0.3 0.5 0.6 0.8 1.0)
+START_T_VALUES=(0.0 ) # 0.1 0.3 0.5 0.6 0.8 1.0)
 
 # ---- Hidden-token experiment definitions ----
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
@@ -49,8 +49,14 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200_from_ft/v4_base_mse02.yaml|v4_base_mse02"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001.yaml|v4_mse01_cos001"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum.yaml|v4_mse01_cos001_noisy_enc_curriculum"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4"
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse002_cos0005_merged_noisy_enc.yaml|v4_mse002_cos0005_merged_noisy_enc"
+    
+    # "configs/sfd/hidden_b_h200_from_ft/e1_clean_enc_drop03_no_p3.yaml|e1_clean_enc_drop03_no_p3"
+    # "configs/sfd/hidden_b_h200_from_ft/e2_noisy_enc_drop03_no_p3.yaml|e2_noisy_enc_drop03_no_p3"
+    # "configs/sfd/hidden_b_h200_from_ft/e3_noisy_enc_drop03_p3.yaml|e3_noisy_enc_drop03_p3"
+    # "configs/sfd/hidden_b_h200_from_ft/e4_noisy_enc_drop03_p3_sep_enc.yaml|e4_noisy_enc_drop03_p3_sep_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/e4_clean_enc_drop03_p3_sep_enc.yaml|e4_clean_enc_drop03_p3_sep_enc"
 )
 
 echo "============================================="

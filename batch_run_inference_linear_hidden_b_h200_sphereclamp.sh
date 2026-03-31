@@ -19,16 +19,17 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-20000}
+CKPT_STEP=${1:-40000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
-TIME=${TIME:-"00-6:00:00"}
+TIME=${TIME:-"00-3:00:00"}
 NUM_GPUS=1
 GPUS="h200:${NUM_GPUS}"
 MEM="180G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
+PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-1024}  # default 512; override: PER_PROC_BATCH_SIZE=256 bash ...
 
 # ---- Inference output directory ----
 INFERENCE_OUTPUT_DIR="outputs/inference"
@@ -85,12 +86,33 @@ EXPERIMENTS=(
     # "configs/sfd/hidden_b_h200_from_ft/v4_1_mse01_noisy_enc_curriculum_repg_1p5.yaml|v4_1_mse01_noisy_enc_curriculum_repg_1p5"
     # "configs/sfd/hidden_b_h200_from_ft/v4_1_noisy_enc_curriculum_hgd_scale_4_no_hloss.yaml|v4_1_noisy_enc_curriculum_hgd_scale_4_no_hloss"
 
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_r3"
-    "configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3.yaml|v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse01_noisy_enc_curriculum_repg_1p5_r3"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse001_noisy_enc_curriculum_repg_1p5_r3"
+    # "configs/sfd/hidden_b_h200_from_ft/e4_noisy_enc_drop03_p3_sep_enc.yaml|e4_noisy_enc_drop03_p3_sep_enc"
+
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5_sep_enc.yaml|v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5_sep_enc"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_clean_enc_curriculum_cfg_1p5_sep_enc.yaml|v4_mse01_cos001_clean_enc_curriculum_cfg_1p5_sep_enc"
+
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_r3"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3.yaml|v4_noisy_enc_curriculum_hgd_scale_4_no_hloss_r3"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_hgd_scale_4_repg_1p5_r3"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse01_noisy_enc_curriculum_repg_1p5_r3"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse01_cos001_noisy_enc_curriculum_repg_1p5_r3"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5_r3.yaml|v4_mse001_noisy_enc_curriculum_repg_1p5_r3"
+
+    # "configs/sfd/hidden_b_h200_from_ft/e1_clean_enc_drop03_no_p3.yaml|e1_clean_enc_drop03_no_p3"
+
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5.yaml|v4_mse001_noisy_enc_curriculum_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_hgd_scale_4_repg_1p5.yaml|v4_mse001_noisy_enc_curriculum_hgd_scale_4_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_curriculum_repg_1p5.yaml|v4_mse0001_noisy_enc_curriculum_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_repg_1p5_no_hloss.yaml|v4_noisy_enc_curriculum_repg_1p5_no_hloss"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_cos001_noisy_enc_curriculum_repg_1p5.yaml|v4_mse001_cos001_noisy_enc_curriculum_repg_1p5"
+
+
+    # For now only run at 20K, 40K, but 60K still not done
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5"
+
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged"
 )
 
 echo "============================================="
@@ -149,6 +171,7 @@ GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
     ckpt_path=${CKPT_PATH} \\
     sample.sampling_method=euler \\
     sample.num_sampling_steps=100 \\
+    sample.per_proc_batch_size=${PER_PROC_BATCH_SIZE} \\
     sample.fid_num=50000 \\
     sample.balanced_sampling=true \\
     train.output_dir=${INFERENCE_OUTPUT_DIR} \\
@@ -177,3 +200,5 @@ echo "============================================="
 echo "  Submitted ${SUBMITTED} inference jobs (linear hidden + sphere clamp)."
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="
+
+

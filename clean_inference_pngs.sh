@@ -8,7 +8,8 @@
 
 set -euo pipefail
 
-TARGET_DIR="outputs/inference"
+# TARGET_DIR="outputs/inference"
+TARGET_DIR="outputs/inference/v4_mse01_cos001_merged_noisy_enc_0100000"
 
 if [[ ! -d "$TARGET_DIR" ]]; then
     echo "Directory '$TARGET_DIR' not found."

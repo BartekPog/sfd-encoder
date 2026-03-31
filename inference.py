@@ -119,7 +119,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
               hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False,
               hidden_rep_guidance=1.0,
               encode_first_pass=False, encode_linear_start_t=None,
-              encode_fixed_start_t=None):
+              encode_fixed_start_t=None, encode_reground_t_fix=None):
     """
     Run sampling.
     """
@@ -222,6 +222,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += f"-enclin{encode_linear_start_t:.2f}"
     if encode_fixed_start_t is not None:
         folder_name += f"-encfix{encode_fixed_start_t:.2f}"
+    if encode_reground_t_fix is not None:
+        folder_name += f"-encreground{encode_reground_t_fix:.2f}"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
@@ -553,6 +555,36 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             if encode_fixed_start_t is not None:
                 print_with_prefix(f'Encode-fixed mode: encode → noisy h_init (start_t={encode_fixed_start_t:.2f}) → fixed hidden → generate')
 
+    # Encode-reground mode: re-encode hidden tokens from x_t at every ODE step,
+    # then condition image denoising on the recovered h_clean (noised to t_fix).
+    # No real-image dataset lookup needed — purely generative.
+    sample_fn_encode_reground = None
+    if encode_reground_t_fix is not None:
+        assert use_hidden and use_semantic_first, \
+            "Encode-reground mode requires hidden tokens and semantic-first mode"
+        normalize_hidden = train_config['model'].get('normalize_hidden', True)
+        sample_fn_encode_reground = sampler.sample_ode_semantic_first_hidden(
+            sampling_method=train_config['sample']['sampling_method'],
+            num_steps=train_config['sample']['num_sampling_steps'],
+            atol=train_config['sample']['atol'],
+            rtol=train_config['sample']['rtol'],
+            reverse=train_config['sample']['reverse'],
+            timestep_shift=timestep_shift,
+            semfirst_delta_t=semfirst_delta_t,
+            semantic_chans=semantic_chans,
+            num_hidden_tokens=model.num_hidden_tokens,
+            hidden_token_dim=model.hidden_token_dim,
+            hidden_schedule="reground",
+            hidden_reground_t_fix=encode_reground_t_fix,
+            normalize_hidden=normalize_hidden,
+            hidden_sphere_clamp=hidden_sphere_clamp,
+            hidden_rep_guidance=hidden_rep_guidance,
+        )
+        if accelerator.process_index == 0:
+            print_with_prefix(f'Encode-reground mode: re-encode h_clean from x_t at each step, '
+                              f't_fix={encode_reground_t_fix:.2f}, '
+                              f'normalize_hidden={normalize_hidden}')
+
     if vae is None:
         vae = VA_VAE(
             f'tokenizer/configs/{train_config["vae"]["model_name"]}.yaml',
@@ -847,6 +879,35 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                     model_fn = model.forward
 
                 samples = sample_fn_encode_fixed(z, model_fn, _z_hidden=h_init, **model_kwargs)[-1]
+            elif encode_reground_t_fix is not None:
+                # --- Encode-reground mode ---
+                # No real-image lookup: hidden tokens are re-encoded from x_t at every ODE step.
+                if fixed_class_label is not None:
+                    y = torch.tensor([fixed_class_label] * n, device=device)
+                elif use_balanced_sampling:
+                    y_list = []
+                    for sample_idx in range(n):
+                        global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
+                        if global_index >= fid_num:
+                            y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
+                        else:
+                            y_list.append(balanced_labels[global_index:global_index+1])
+                    y = torch.cat(y_list, dim=0)
+                else:
+                    y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
+
+                if using_cfg:
+                    z = torch.cat([z, z], 0)
+                    y_null = torch.tensor([1000] * n, device=device)
+                    y_cfg = torch.cat([y, y_null], 0)
+                    model_kwargs = dict(y=y_cfg, cfg_scale=cfg_scale, cfg_interval=True,
+                                       cfg_interval_start=cfg_interval_start)
+                    model_fn = model.forward_with_cfg
+                else:
+                    model_kwargs = dict(y=y)
+                    model_fn = model.forward
+
+                samples = sample_fn_encode_reground(z, model_fn, **model_kwargs)[-1]
             else:
                 # Get labels (fixed, balanced, or random)
                 if fixed_class_label is not None:
@@ -969,6 +1030,12 @@ if __name__ == "__main__":
                         help='Encode-fixed mode: encode GT hidden tokens from real images, add noise '
                              'to level start_t, then hold the noisy hidden tokens fixed during image '
                              'generation (no hidden denoising). Sweep values like 0.3, 0.5, 0.7, 1.0.')
+    parser.add_argument('--encode_reground_t_fix', type=float, default=None,
+                        help='Encode-reground mode: at every ODE step, re-encode h_clean from the '
+                             'current noisy x_t (Pass-1 style), noise it to t_fix, and condition the '
+                             'image denoising step on the result. No real-image lookup needed. '
+                             't_fix=1.0 (default) = fully clean conditioning; 0.0 = no conditioning. '
+                             'Sweep values like 0.3, 0.5, 0.7, 0.9, 1.0.')
     parser.add_argument('--no_cleanup_samples', action='store_true', default=False,
                         help='Keep PNG sample files after FID calculation. By default, PNGs are '
                              'deleted after FID is computed to save disk space.')
@@ -1052,7 +1119,8 @@ if __name__ == "__main__":
         hidden_rep_guidance=args.hidden_rep_guidance,
         encode_first_pass=args.encode_first_pass,
         encode_linear_start_t=args.encode_linear_start_t,
-        encode_fixed_start_t=args.encode_fixed_start_t)
+        encode_fixed_start_t=args.encode_fixed_start_t,
+        encode_reground_t_fix=args.encode_reground_t_fix)
 
     if not args.demo and args.calculate_fid:
         # calculate FID

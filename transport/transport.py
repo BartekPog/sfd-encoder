@@ -343,6 +343,9 @@ class Transport:
         hidden_guidance_scale=1.0,
         hidden_reuse_noise_pass2=False,
         hidden_reuse_noise_pass3=False,
+        hidden_clean_only_pass2=False,
+        hidden_dropout_prob=0.0,
+        encoder_model=None,
     ):
         """
         Self-encoder training loss with hidden tokens (3-pass variant).
@@ -412,6 +415,11 @@ class Transport:
         hidden_token_dim = m.hidden_token_dim
         B = x1.shape[0]
         device = x1.device
+        
+        if hidden_dropout_prob > 0.0:
+            drop_mask = (th.rand(B, device=device) < hidden_dropout_prob).view(B)
+        else:
+            drop_mask = None
 
         # ============ PASS 1: Encode ============
         # Convention: x_t = t * x1 + (1-t) * x0, where x0=noise, x1=clean data
@@ -466,7 +474,8 @@ class Transport:
                 t_encode_img_for_model = t_encode_img
             xt_encode = x1  # clean image
 
-        pass1_out = m(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
+        model_for_encode = encoder_model if encoder_model is not None else m
+        pass1_out = model_for_encode(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
                       t_hidden=t_encode_hid,
                       encode_mode=use_encode_mode_emb, **model_kwargs)
         h_velocity = pass1_out[1]
@@ -516,13 +525,18 @@ class Transport:
         run_pass3 = (hidden_loss_scale >= 1.0) or (th.rand(1).item() < hidden_loss_scale)
 
         if run_pass3:
-            if hidden_same_t_as_img:
+            if hidden_clean_only_pass2:
+                t_h3 = th.ones(B, device=device) * t1_h
+            elif hidden_same_t_as_img:
                 t_h3 = t_img.clone().clamp(t0_h, t1_h)
             elif hidden_t_shift != 0:
                 t_h3 = self.sample_logit_normal(hidden_t_shift, 1, size=B).to(device)
                 t_h3 = t_h3 * (t1_h - t0_h) + t0_h
             else:
                 t_h3 = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+            
+            if drop_mask is not None:
+                t_h3 = th.where(drop_mask, th.zeros_like(t_h3) + t0_h, t_h3)
             
             x0_h3 = x0_h if hidden_reuse_noise_pass3 else th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
             t_h3_expanded = t_h3.view(B, 1, 1)
@@ -542,13 +556,17 @@ class Transport:
                           t_hidden=t_h3, **model_kwargs)
             h_pred3 = pass3_out[1]
 
-            hidden_loss = mean_flat((h_pred3 - ut_h3) ** 2)
+            hidden_loss_unreduced = (h_pred3 - ut_h3) ** 2
+            if drop_mask is not None:
+                hidden_loss_unreduced = hidden_loss_unreduced * (~drop_mask).view(B, 1, 1).float()
+            hidden_loss = mean_flat(hidden_loss_unreduced)
 
             if hidden_cos_weight > 0:
                 h1_pred3 = xt_h3 + (1 - t_h3_expanded) * h_pred3
-                hidden_cos_loss = mean_flat(
-                    1 - th.nn.functional.cosine_similarity(h1_pred3, h_clean_detached, dim=-1)
-                )
+                hidden_cos_loss_unreduced = 1 - th.nn.functional.cosine_similarity(h1_pred3, h_clean_detached, dim=-1)
+                if drop_mask is not None:
+                    hidden_cos_loss_unreduced = hidden_cos_loss_unreduced * (~drop_mask).view(B, 1).float()
+                hidden_cos_loss = mean_flat(hidden_cos_loss_unreduced)
             else:
                 hidden_cos_loss = None
 
@@ -569,13 +587,19 @@ class Transport:
             hidden_cos_loss_for_terms = None
 
         # ============ PASS 2: Image denoising conditioned on encoding ============
-        if hidden_same_t_as_img:
+        if hidden_clean_only_pass2:
+            t_h = th.ones(B, device=device) * t1_h
+        elif hidden_same_t_as_img:
             t_h = t_img.clone().clamp(t0_h, t1_h)
         elif hidden_t_shift != 0:
             t_h = self.sample_logit_normal(hidden_t_shift, 1, size=B).to(device)
             t_h = t_h * (t1_h - t0_h) + t0_h
         else:
             t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+            
+        if drop_mask is not None:
+            t_h = th.where(drop_mask, th.zeros_like(t_h) + t0_h, t_h)
+            
         if hidden_grad_dyn_scale > 0.0:
             h_clean = self.dyn_grad_scale(h_clean, t_h, hidden_grad_dyn_scale)
 
@@ -1417,6 +1441,8 @@ class Sampler:
         hidden_schedule_max_t=1.0,
         hidden_sphere_clamp=False,
         hidden_rep_guidance=1.0,
+        hidden_reground_t_fix=1.0,
+        normalize_hidden=True,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -1435,12 +1461,23 @@ class Sampler:
                 - "encode_linear": Hidden tokens start at hidden_schedule_start_t and linearly reach 1.0
                   by the end. Intended for GT-initialised hidden tokens:
                   h_init = start_t * h_clean + (1-start_t) * noise, passed via _z_hidden.
+                - "reground": At every ODE step, re-encode hidden tokens from the current noisy image
+                  x_t by running Pass-1 (pure-noise hidden input, t_hid=0), then condition the image
+                  denoising step on the recovered h_clean (optionally noised to hidden_reground_t_fix).
+                  This allows hidden tokens to track the image as it is denoised.
+                  Two model calls per step; hidden ODE state is never updated.
             hidden_schedule_start_t: Used with "linear_from" and "encode_linear". For "linear_from",
                 hidden tokens are frozen until t_hid would exceed this value. For "encode_linear",
                 this is the starting hidden timestep (noise level of the GT-initialised hidden state).
             hidden_schedule_max_t: Only used with "linear". Maximum hidden timestep reached at
                 the end of generation (default 1.0 = fully clean). Values in (0, 1) leave hidden
                 tokens partially noisy; the per-step Δt_hid is scaled proportionally.
+            hidden_reground_t_fix: Only used with "reground". The noise level at which the
+                re-encoded h_clean is presented to the model for the conditioning step.
+                1.0 = fully clean (default), 0.0 = pure noise (no conditioning).
+            normalize_hidden: Only used with "reground". Whether to L2-normalise h_clean onto
+                the unit sphere before noising/conditioning (mirrors training normalize_hidden,
+                default True).
         """
         t_max = 1.0 + semfirst_delta_t
         texture_chans = None
@@ -1458,8 +1495,57 @@ class Sampler:
                 texture_chans = C - semantic_chans
 
             # Compute per-component times
-            t_sem = t.clamp(max=1.0)                     # semantic time
-            t_tex = (t - semfirst_delta_t).clamp(min=0.0) # texture time (delayed)
+            t_sem = t.clamp(max=1.0)                       # semantic time
+            t_tex = (t - semfirst_delta_t).clamp(min=0.0)  # texture time (delayed)
+            t_tuple = (t_tex, t_sem)
+
+            # ----------------------------------------------------------------
+            # "reground" schedule: two model calls per step.
+            # Call 1 — encode h_clean from current x_img + pure-noise hidden.
+            # Call 2 — denoise image conditioned on the re-grounded h_clean.
+            # The hidden ODE state is never evolved (zero velocity returned).
+            # ----------------------------------------------------------------
+            if hidden_schedule == "reground":
+                # Call 1: encode
+                x0_h_enc = th.randn_like(x_hidden)
+                t_h_enc = th.zeros(B, device=device)
+                enc_result = model(x_img, t=t_tuple, x_hidden=x0_h_enc,
+                                   t_hidden=t_h_enc, **model_kwargs)
+                h_clean = x0_h_enc + enc_result[1]
+                if normalize_hidden:
+                    h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+
+                # Noise h_clean to t_fix level for the conditioning call
+                x0_h_cond = th.randn_like(h_clean)
+                xt_h = hidden_reground_t_fix * h_clean + (1.0 - hidden_reground_t_fix) * x0_h_cond
+                t_hid_cond = th.full((B,), hidden_reground_t_fix, device=device)
+
+                # Call 2: image denoising conditioned on re-grounded hidden
+                result = model(x_img, t=t_tuple, x_hidden=xt_h,
+                               t_hidden=t_hid_cond, **model_kwargs)
+                img_vel = result[0]
+
+                # Optional hidden-representation guidance (amplify away from uncond)
+                if hidden_rep_guidance > 1.0:
+                    h_uncond = th.randn(B, num_hidden_tokens, hidden_token_dim,
+                                        device=device)
+                    t_h_uncond = th.zeros(B, device=device)
+                    result_uncond = model(x_img, t=t_tuple, x_hidden=h_uncond,
+                                          t_hidden=t_h_uncond, **model_kwargs)
+                    img_vel_uncond = result_uncond[0]
+                    w = 1.0 + (hidden_rep_guidance - 1.0) * hidden_reground_t_fix
+                    img_vel = img_vel_uncond + w * (img_vel - img_vel_uncond)
+
+                # Semantic-first image velocity masking
+                img_mask = th.zeros_like(x_img)
+                img_mask[:, :texture_chans, ...] = (t >= semfirst_delta_t).view(
+                    B, 1, *[1] * (x_img.dim() - 2))
+                img_mask[:, -semantic_chans:, ...] = (t <= 1.0).view(
+                    B, 1, *[1] * (x_img.dim() - 2))
+                img_vel = img_vel * img_mask
+
+                # Hidden state not evolved by the ODE (re-encoded fresh each step)
+                return (img_vel, th.zeros_like(x_hidden))
 
             if hidden_schedule == "fixed":
                 t_hid = th.ones_like(t)
@@ -1479,8 +1565,7 @@ class Sampler:
             else:
                 t_hid = t_sem
 
-            # Model expects tuple timestep for semantic first
-            t_tuple = (t_tex, t_sem)
+            # Model expects tuple timestep for semantic first (already set above)
 
             # Forward: model returns (img_velocity, hidden_velocity)
             result = model(x_img, t=t_tuple, x_hidden=x_hidden,

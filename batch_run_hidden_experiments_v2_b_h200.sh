@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-4}
+NUM_CHAINS=${1:-5}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -253,14 +253,97 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5_r3.yaml "${NUM_CHAINS}" 2
 # echo ""
 
-echo ">>> V4-R3-7: NO hidden loss, curriculum + repg_1.5 (reuse p3, resample p2, zero pass 3 compute) — from ft-1540k (4x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_repg_1p5_no_hloss_r3.yaml "${NUM_CHAINS}" 2
+# echo ">>> V4-R3-7: NO hidden loss, curriculum + repg_1.5 (reuse p3, resample p2, zero pass 3 compute) — from ft-1540k (4x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_repg_1p5_no_hloss_r3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> Separate Encoder, NO dropout, NO noisy_enc, default config base"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_clean_enc_curriculum_cfg_1p5_sep_enc.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> Separate Encoder, NO dropout, default config base"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse01_cos001_noisy_enc_curriculum_cfg_1p5_sep_enc.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+
+
+# echo "============================================="
+# echo "  E-Series: Encoding Ablation Experiments"
+# echo "============================================="
+
+# echo ">>> E1: Clean encoding, drop 30% to pure noise, no Pass 3, no rep guidance"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/e1_clean_enc_drop03_no_p3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> E2: Noisy encoding, drop 30% to pure noise, no Pass 3, rep guidance 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/e2_noisy_enc_drop03_no_p3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> E3: Noisy encoding, drop 30% to pure noise, WITH Pass 3, rep guidance 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/e3_noisy_enc_drop03_p3.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> E4: Noisy encoding, drop 30%, WITH Pass 3, SEPARATE parameter encoder"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/e4_noisy_enc_drop03_p3_sep_enc.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> E4.1: Clean encoding, drop 30%, WITH Pass 3, SEPARATE parameter encoder"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/e4_clean_enc_drop03_p3_sep_enc.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: MSE 0.001 weak only, curriculum + repg_1.5 (resample p2 and p3)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: MSE 0.001 weak only, curriculum + hgd_scale=4 + repg_1.5 (resample p2 and p3)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_curriculum_hgd_scale_4_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: MSE 0.0001 ultra weak only, curriculum + repg_1.5 (resample p2 and p3)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: NO hidden loss, curriculum + repg_1.5 (resample p2 and p3)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_repg_1p5_no_hloss.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: MSE 0.01 + COS 0.01, curriculum + repg_1.5 (resample p2 and p3)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_cos001_noisy_enc_curriculum_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: No Curriculum, MSE 0.01, Shift 1.0"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: No Curriculum, MSE 0.01, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: No Curriculum, MSE 0.001, Shift 1.0"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: No Curriculum, MSE 0.001, Shift 1.5 MERGED PASSES"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+echo ">>> V4-NEW: No Curriculum, No Hidden Loss, Shift 1.0, repg 1.5"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_nocurr_shift1_repg_1p5_no_hloss.yaml "${NUM_CHAINS}" 2
+echo ""
+
+echo ">>> V4-NEW: No Curriculum, MSE 0.0001, Shift 1.5, repg 1.5"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml "${NUM_CHAINS}" 2
+echo ""
+
+echo ">>> V4-NEW: No Curriculum, MSE 0.0001, Shift 0.5, repg 1.5"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift0p5_repg_1p5.yaml "${NUM_CHAINS}" 2
 echo ""
 
 echo "============================================="
 echo "  All V2/V4/V4.1 experiments submitted!"
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="
+
 
 
 

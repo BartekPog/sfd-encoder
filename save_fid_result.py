@@ -88,7 +88,8 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  hidden_schedule_max_t: float | None = None,
                  hidden_sphere_clamp: bool = False,
                  encode_linear_start_t: float | None = None,
-                 encode_fixed_start_t: float | None = None) -> Path | None:
+                 encode_fixed_start_t: float | None = None,
+                 encode_reground_t_fix: float | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -141,6 +142,17 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     st_matches = [m for m in matches if tag in m.parent.name]
                     if st_matches:
                         matches = st_matches
+            elif inference_type == "encodereground":
+                matches = [m for m in matches if "-encreground" in m.parent.name]
+                if encode_reground_t_fix is not None:
+                    tag = f"encreground{encode_reground_t_fix:.2f}"
+                    st_matches = [m for m in matches if tag in m.parent.name]
+                    if st_matches:
+                        matches = st_matches
+                if num_steps and len(matches) > 1:
+                    step_matches = [m for m in matches if f"-{num_steps}-" in m.parent.name]
+                    if step_matches:
+                        matches = step_matches
             else:
                 matches = [m for m in matches
                            if not m.parent.name.endswith("-twopass")
@@ -196,7 +208,8 @@ def main():
     parser.add_argument("--ckpt_step",      required=True, type=int,
                         help="Checkpoint step that was evaluated")
     parser.add_argument("--inference_type", required=True,
-                        choices=["linear", "twopass", "standard", "encodefirst", "encodelinear", "encodefixed"],
+                        choices=["linear", "twopass", "standard", "encodefirst", "encodelinear",
+                                 "encodefixed", "encodereground"],
                         help="Inference mode")
     parser.add_argument("--sampler",        default="euler")
     parser.add_argument("--num_steps",      type=int, default=100,
@@ -212,6 +225,8 @@ def main():
                         help="Start timestep for encode-linear mode (e.g. 0.50).")
     parser.add_argument("--encode_fixed_start_t", type=float, default=None,
                         help="Start timestep for encode-fixed mode (e.g. 0.50).")
+    parser.add_argument("--encode_reground_t_fix", type=float, default=None,
+                        help="t_fix for encode-reground mode (e.g. 1.0).")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -225,7 +240,8 @@ def main():
                            hidden_schedule_max_t=args.hidden_schedule_max_t,
                            hidden_sphere_clamp=args.hidden_sphere_clamp,
                            encode_linear_start_t=args.encode_linear_start_t,
-                           encode_fixed_start_t=args.encode_fixed_start_t)
+                           encode_fixed_start_t=args.encode_fixed_start_t,
+                           encode_reground_t_fix=args.encode_reground_t_fix)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -253,6 +269,7 @@ def main():
         "hidden_sphere_clamp":    args.hidden_sphere_clamp,
         "encode_linear_start_t":  args.encode_linear_start_t,
         "encode_fixed_start_t":   args.encode_fixed_start_t,
+        "encode_reground_t_fix":  args.encode_reground_t_fix,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

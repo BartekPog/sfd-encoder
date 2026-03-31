@@ -165,6 +165,27 @@ def do_train(train_config, accelerator):
     model = model.to(device)
     if _dist_initialized():
         model = DDP(model, device_ids=[rank])
+        
+    use_separate_encoder = train_config['model'].get('use_separate_encoder', False)
+    if use_separate_encoder:
+        encoder_model = deepcopy(model.module if hasattr(model, 'module') else model).to(device)
+        if _dist_initialized():
+            # Pass 1 drops the spatial image prediction, so we must allow unused parameters 
+            # to prevent PyTorch DDP from crashing the encoder_model gradients.
+            use_hidden = train_config.get('model', {}).get('use_hidden_tokens', False)
+            encoder_model = DDP(
+                encoder_model, 
+                device_ids=[rank],
+                find_unused_parameters=use_hidden,
+                broadcast_buffers=not use_hidden
+            )
+        opt_params = list(model.parameters()) + list(encoder_model.parameters())
+        if accelerator.is_main_process:
+            logger.info("Initialized separate encoder_model with identical starting weights.")
+    else:
+        encoder_model = None
+        opt_params = model.parameters()
+
     transport = create_transport(
         train_config['transport']['path_type'],
         train_config['transport']['prediction'],
@@ -192,7 +213,7 @@ def do_train(train_config, accelerator):
         logger.info(f'Repa weight: {repa_weight}')
         if semfirst_delta_t > 0 and semantic_chans > 0:
             logger.info(f'Semantic First enabled: delta_t={semfirst_delta_t}')
-    opt = torch.optim.AdamW(model.parameters(), lr=train_config['optimizer']['lr'], weight_decay=0, betas=(0.9, train_config['optimizer']['beta2']))
+    opt = torch.optim.AdamW(opt_params, lr=train_config['optimizer']['lr'], weight_decay=0, betas=(0.9, train_config['optimizer']['beta2']))
     
     # Setup data
     dataset = ImgLatentDataset(
@@ -439,6 +460,9 @@ def do_train(train_config, accelerator):
                             hidden_guidance_scale=hidden_guidance_scale,
                             hidden_reuse_noise_pass2=hidden_reuse_noise_pass2,
                             hidden_reuse_noise_pass3=hidden_reuse_noise_pass3,
+                            hidden_clean_only_pass2=train_config['model'].get('hidden_clean_only_pass2', False),
+                            hidden_dropout_prob=train_config['model'].get('hidden_dropout_prob', 0.0),
+                            encoder_model=encoder_model,
                         )
                 else:
                     loss_dict = transport.training_losses(model, x, model_kwargs, use_repa=use_repa, feature_dino=feature_dino)
