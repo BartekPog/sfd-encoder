@@ -28,6 +28,9 @@ COLUMN_ORDER = [
     "hidden_sphere_clamp",
     "encode_linear_start_t",
     "encode_fixed_start_t",
+    "encode_reground_t_fix",
+    "reground_fixed_enc_noise",
+    "reground_fixed_cond_noise",
     # architecture
     "model_type",
     "use_hidden_tokens",

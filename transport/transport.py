@@ -1443,6 +1443,8 @@ class Sampler:
         hidden_rep_guidance=1.0,
         hidden_reground_t_fix=1.0,
         normalize_hidden=True,
+        reground_fixed_enc_noise=False,
+        reground_fixed_cond_noise=False,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -1478,9 +1480,14 @@ class Sampler:
             normalize_hidden: Only used with "reground". Whether to L2-normalise h_clean onto
                 the unit sphere before noising/conditioning (mirrors training normalize_hidden,
                 default True).
+            reground_fixed_enc_noise: Only used with "reground". If True, sample the encode-pass
+                noise once on the first ODE step and reuse it for all subsequent steps.
+            reground_fixed_cond_noise: Only used with "reground". If True, sample the conditioning
+                noise (used to noise h_clean to t_fix) once and reuse it for all subsequent steps.
         """
         t_max = 1.0 + semfirst_delta_t
         texture_chans = None
+        _reground_cache = {}
 
         def joint_drift_semantic_first(state, t, model, **model_kwargs):
             """
@@ -1507,7 +1514,12 @@ class Sampler:
             # ----------------------------------------------------------------
             if hidden_schedule == "reground":
                 # Call 1: encode
-                x0_h_enc = th.randn_like(x_hidden)
+                if reground_fixed_enc_noise and "enc_noise" in _reground_cache:
+                    x0_h_enc = _reground_cache["enc_noise"]
+                else:
+                    x0_h_enc = th.randn_like(x_hidden)
+                    if reground_fixed_enc_noise:
+                        _reground_cache["enc_noise"] = x0_h_enc
                 t_h_enc = th.zeros(B, device=device)
                 enc_result = model(x_img, t=t_tuple, x_hidden=x0_h_enc,
                                    t_hidden=t_h_enc, **model_kwargs)
@@ -1516,7 +1528,12 @@ class Sampler:
                     h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
 
                 # Noise h_clean to t_fix level for the conditioning call
-                x0_h_cond = th.randn_like(h_clean)
+                if reground_fixed_cond_noise and "cond_noise" in _reground_cache:
+                    x0_h_cond = _reground_cache["cond_noise"]
+                else:
+                    x0_h_cond = th.randn_like(h_clean)
+                    if reground_fixed_cond_noise:
+                        _reground_cache["cond_noise"] = x0_h_cond
                 xt_h = hidden_reground_t_fix * h_clean + (1.0 - hidden_reground_t_fix) * x0_h_cond
                 t_hid_cond = th.full((B,), hidden_reground_t_fix, device=device)
 

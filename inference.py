@@ -119,7 +119,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
               hidden_schedule=None, hidden_schedule_max_t=1.0, two_pass=False, hidden_sphere_clamp=False,
               hidden_rep_guidance=1.0,
               encode_first_pass=False, encode_linear_start_t=None,
-              encode_fixed_start_t=None, encode_reground_t_fix=None):
+              encode_fixed_start_t=None, encode_reground_t_fix=None,
+              reground_fixed_enc_noise=False, reground_fixed_cond_noise=False):
     """
     Run sampling.
     """
@@ -224,6 +225,10 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         folder_name += f"-encfix{encode_fixed_start_t:.2f}"
     if encode_reground_t_fix is not None:
         folder_name += f"-encreground{encode_reground_t_fix:.2f}"
+        if reground_fixed_enc_noise:
+            folder_name += "-fixenc"
+        if reground_fixed_cond_noise:
+            folder_name += "-fixcond"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
@@ -579,11 +584,15 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             normalize_hidden=normalize_hidden,
             hidden_sphere_clamp=hidden_sphere_clamp,
             hidden_rep_guidance=hidden_rep_guidance,
+            reground_fixed_enc_noise=reground_fixed_enc_noise,
+            reground_fixed_cond_noise=reground_fixed_cond_noise,
         )
         if accelerator.process_index == 0:
             print_with_prefix(f'Encode-reground mode: re-encode h_clean from x_t at each step, '
                               f't_fix={encode_reground_t_fix:.2f}, '
-                              f'normalize_hidden={normalize_hidden}')
+                              f'normalize_hidden={normalize_hidden}, '
+                              f'fixed_enc_noise={reground_fixed_enc_noise}, '
+                              f'fixed_cond_noise={reground_fixed_cond_noise}')
 
     if vae is None:
         vae = VA_VAE(
@@ -1036,6 +1045,13 @@ if __name__ == "__main__":
                              'image denoising step on the result. No real-image lookup needed. '
                              't_fix=1.0 (default) = fully clean conditioning; 0.0 = no conditioning. '
                              'Sweep values like 0.3, 0.5, 0.7, 0.9, 1.0.')
+    parser.add_argument('--reground_fixed_enc_noise', action='store_true', default=False,
+                        help='Encode-reground mode: reuse the same encode-pass noise across all '
+                             'ODE steps instead of resampling. Gives a more consistent h_clean '
+                             'trajectory as only the evolving x_t causes changes.')
+    parser.add_argument('--reground_fixed_cond_noise', action='store_true', default=False,
+                        help='Encode-reground mode: reuse the same conditioning noise (used to '
+                             'noise h_clean to t_fix) across all ODE steps.')
     parser.add_argument('--no_cleanup_samples', action='store_true', default=False,
                         help='Keep PNG sample files after FID calculation. By default, PNGs are '
                              'deleted after FID is computed to save disk space.')
@@ -1120,7 +1136,9 @@ if __name__ == "__main__":
         encode_first_pass=args.encode_first_pass,
         encode_linear_start_t=args.encode_linear_start_t,
         encode_fixed_start_t=args.encode_fixed_start_t,
-        encode_reground_t_fix=args.encode_reground_t_fix)
+        encode_reground_t_fix=args.encode_reground_t_fix,
+        reground_fixed_enc_noise=args.reground_fixed_enc_noise,
+        reground_fixed_cond_noise=args.reground_fixed_cond_noise)
 
     if not args.demo and args.calculate_fid:
         # calculate FID

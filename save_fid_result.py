@@ -89,7 +89,9 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  hidden_sphere_clamp: bool = False,
                  encode_linear_start_t: float | None = None,
                  encode_fixed_start_t: float | None = None,
-                 encode_reground_t_fix: float | None = None) -> Path | None:
+                 encode_reground_t_fix: float | None = None,
+                 reground_fixed_enc_noise: bool = False,
+                 reground_fixed_cond_noise: bool = False) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -149,6 +151,15 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     st_matches = [m for m in matches if tag in m.parent.name]
                     if st_matches:
                         matches = st_matches
+                # Filter by fixed noise flags
+                if reground_fixed_enc_noise:
+                    matches = [m for m in matches if "-fixenc" in m.parent.name]
+                else:
+                    matches = [m for m in matches if "-fixenc" not in m.parent.name]
+                if reground_fixed_cond_noise:
+                    matches = [m for m in matches if "-fixcond" in m.parent.name]
+                else:
+                    matches = [m for m in matches if "-fixcond" not in m.parent.name]
                 if num_steps and len(matches) > 1:
                     step_matches = [m for m in matches if f"-{num_steps}-" in m.parent.name]
                     if step_matches:
@@ -227,6 +238,10 @@ def main():
                         help="Start timestep for encode-fixed mode (e.g. 0.50).")
     parser.add_argument("--encode_reground_t_fix", type=float, default=None,
                         help="t_fix for encode-reground mode (e.g. 1.0).")
+    parser.add_argument("--reground_fixed_enc_noise", action="store_true", default=False,
+                        help="Set if inference was run with --reground_fixed_enc_noise.")
+    parser.add_argument("--reground_fixed_cond_noise", action="store_true", default=False,
+                        help="Set if inference was run with --reground_fixed_cond_noise.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -241,7 +256,9 @@ def main():
                            hidden_sphere_clamp=args.hidden_sphere_clamp,
                            encode_linear_start_t=args.encode_linear_start_t,
                            encode_fixed_start_t=args.encode_fixed_start_t,
-                           encode_reground_t_fix=args.encode_reground_t_fix)
+                           encode_reground_t_fix=args.encode_reground_t_fix,
+                           reground_fixed_enc_noise=args.reground_fixed_enc_noise,
+                           reground_fixed_cond_noise=args.reground_fixed_cond_noise)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -270,6 +287,8 @@ def main():
         "encode_linear_start_t":  args.encode_linear_start_t,
         "encode_fixed_start_t":   args.encode_fixed_start_t,
         "encode_reground_t_fix":  args.encode_reground_t_fix,
+        "reground_fixed_enc_noise":  args.reground_fixed_enc_noise,
+        "reground_fixed_cond_noise": args.reground_fixed_cond_noise,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

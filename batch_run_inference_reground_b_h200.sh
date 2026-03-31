@@ -44,8 +44,15 @@ NUM_STEPS_VALUES=(100) #*2 inference steps because of the regrounding (each step
 # ---- t_fix values to sweep ----
 # 1.0 = fully clean conditioning (default), 0.0 = no conditioning (ablation)
 # T_FIX_VALUES=(0.7 0.9 0.95 1.0)
-T_FIX_VALUES=(0.8 0.85 0.88 0.92)
+T_FIX_VALUES=(0.85 0.88 0.9 0.92)
 # T_FIX_VALUES=(0.9 0.95 1.0)
+
+# ---- Fixed-noise flags for reground ----
+# When true, the encode / conditioning noise is sampled once and reused across
+# all ODE steps instead of being resampled each step.
+# REGROUND_FIXED_ENC_NOISE=${REGROUND_FIXED_ENC_NOISE:-false}
+REGROUND_FIXED_ENC_NOISE=${REGROUND_FIXED_ENC_NOISE:-false}
+REGROUND_FIXED_COND_NOISE=${REGROUND_FIXED_COND_NOISE:-false}
 
 # ---- Hidden-token experiment definitions ----
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
@@ -72,6 +79,8 @@ echo "  Sampler: Euler"
 echo "  Mode: re-encode h_clean from x_t at every ODE step → condition image step"
 echo "  Steps sweep: ${NUM_STEPS_VALUES[*]}"
 echo "  t_fix sweep: ${T_FIX_VALUES[*]}"
+echo "  Fixed enc noise: ${REGROUND_FIXED_ENC_NOISE}"
+echo "  Fixed cond noise: ${REGROUND_FIXED_COND_NOISE}"
 echo "  GPUs: ${NUM_GPUS} x H200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
 echo "============================================="
@@ -97,8 +106,24 @@ for T_FIX in "${T_FIX_VALUES[@]}"; do
 
         INFER_EXP_NAME="${TRAIN_EXP_NAME}_${EXP_CKPT_NAME}"
         EXP_LABEL=$(basename "${CONFIG_PATH}" .yaml)
-        JOBSCRIPT="jobs/infer_rg_s${NUM_STEPS}_t${T_FIX_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
-        OUTPUT="job_outputs/infer_rg_s${NUM_STEPS}_t${T_FIX_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
+
+        # Build extra CLI flags for fixed-noise options
+        EXTRA_INFER_FLAGS=""
+        EXTRA_SAVE_FLAGS=""
+        FIXNOISE_TAG=""
+        if [ "${REGROUND_FIXED_ENC_NOISE}" = "true" ]; then
+            EXTRA_INFER_FLAGS+=" --reground_fixed_enc_noise"
+            EXTRA_SAVE_FLAGS+=" --reground_fixed_enc_noise"
+            FIXNOISE_TAG+="_fxenc"
+        fi
+        if [ "${REGROUND_FIXED_COND_NOISE}" = "true" ]; then
+            EXTRA_INFER_FLAGS+=" --reground_fixed_cond_noise"
+            EXTRA_SAVE_FLAGS+=" --reground_fixed_cond_noise"
+            FIXNOISE_TAG+="_fxcond"
+        fi
+
+        JOBSCRIPT="jobs/infer_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
+        OUTPUT="job_outputs/infer_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
         mkdir -p "$(dirname "${JOBSCRIPT}")"
         mkdir -p "$(dirname "${OUTPUT}")"
 
@@ -134,7 +159,7 @@ GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
     train.output_dir=${INFERENCE_OUTPUT_DIR} \\
     train.exp_name=${INFER_EXP_NAME} \\
     --encode_reground_t_fix ${T_FIX} \\
-    --hidden_sphere_clamp
+    --hidden_sphere_clamp${EXTRA_INFER_FLAGS}
 python save_fid_result.py \\
     --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \\
     --config     ${CONFIG_PATH} \\
@@ -143,7 +168,7 @@ python save_fid_result.py \\
     --sampler euler \\
     --num_steps ${NUM_STEPS} \\
     --hidden_sphere_clamp \\
-    --encode_reground_t_fix ${T_FIX}
+    --encode_reground_t_fix ${T_FIX}${EXTRA_SAVE_FLAGS}
 echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
 SLURM_EOF
 
