@@ -91,7 +91,11 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  encode_fixed_start_t: float | None = None,
                  encode_reground_t_fix: float | None = None,
                  reground_fixed_enc_noise: bool = False,
-                 reground_fixed_cond_noise: bool = False) -> Path | None:
+                 reground_fixed_cond_noise: bool = False,
+                 reground_shared_noise: bool = False,
+                 recycle_t_fix: float | None = None,
+                 cfg_scale: float = 1.0,
+                 hidden_rep_guidance: float = 1.0) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -112,6 +116,12 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
 
     When *hidden_sphere_clamp* is True, further filter to folders containing
     ``hsphereclamp``; when False, exclude those folders.
+
+    When *cfg_scale* > 1.0, further filter to folders containing the
+    ``-cfg{cfg_scale:.2f}`` tag produced by inference.py; when cfg_scale ≤ 1.0,
+    exclude any folder containing ``-cfg`` so a guidance-off run never picks up
+    a guidance-on directory.  Same pattern for *hidden_rep_guidance* with the
+    ``-hrg{hidden_rep_guidance:.1f}`` tag.
     """
     for candidate in ["fid_result.txt", "fid_results.txt"]:
         # Check directly first (future-proof)
@@ -160,6 +170,21 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     matches = [m for m in matches if "-fixcond" in m.parent.name]
                 else:
                     matches = [m for m in matches if "-fixcond" not in m.parent.name]
+                if reground_shared_noise:
+                    matches = [m for m in matches if "-sharednoise" in m.parent.name]
+                else:
+                    matches = [m for m in matches if "-sharednoise" not in m.parent.name]
+                if num_steps and len(matches) > 1:
+                    step_matches = [m for m in matches if f"-{num_steps}-" in m.parent.name]
+                    if step_matches:
+                        matches = step_matches
+            elif inference_type == "recycle":
+                matches = [m for m in matches if "-recycle" in m.parent.name]
+                if recycle_t_fix is not None:
+                    tag = f"recycle{recycle_t_fix:.2f}"
+                    st_matches = [m for m in matches if tag in m.parent.name]
+                    if st_matches:
+                        matches = st_matches
                 if num_steps and len(matches) > 1:
                     step_matches = [m for m in matches if f"-{num_steps}-" in m.parent.name]
                     if step_matches:
@@ -169,7 +194,8 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                            if not m.parent.name.endswith("-twopass")
                            and "-encodefirst" not in m.parent.name
                            and "-enclin" not in m.parent.name
-                           and "-encfix" not in m.parent.name]
+                           and "-encfix" not in m.parent.name
+                           and "-recycle" not in m.parent.name]
                 # Filter by num_steps encoded in folder name
                 if num_steps and len(matches) > 1:
                     step_matches = [m for m in matches
@@ -197,6 +223,27 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     no_sc = [m for m in matches if "hsphereclamp" not in m.parent.name]
                     if no_sc:
                         matches = no_sc
+
+            # Guidance filters (applied to every inference_type branch, and
+            # only when the outer search produced candidates to narrow down).
+            if cfg_scale > 1.0:
+                cfg_tag = f"-cfg{cfg_scale:.2f}"
+                cfg_matches = [m for m in matches if cfg_tag in m.parent.name]
+                if cfg_matches:
+                    matches = cfg_matches
+            else:
+                no_cfg = [m for m in matches if "-cfg" not in m.parent.name]
+                if no_cfg:
+                    matches = no_cfg
+            if hidden_rep_guidance > 1.0:
+                hrg_tag = f"-hrg{hidden_rep_guidance:.1f}"
+                hrg_matches = [m for m in matches if hrg_tag in m.parent.name]
+                if hrg_matches:
+                    matches = hrg_matches
+            else:
+                no_hrg = [m for m in matches if "-hrg" not in m.parent.name]
+                if no_hrg:
+                    matches = no_hrg
         if matches:
             return matches[0]
     return None
@@ -220,7 +267,7 @@ def main():
                         help="Checkpoint step that was evaluated")
     parser.add_argument("--inference_type", required=True,
                         choices=["linear", "twopass", "standard", "encodefirst", "encodelinear",
-                                 "encodefixed", "encodereground"],
+                                 "encodefixed", "encodereground", "recycle"],
                         help="Inference mode")
     parser.add_argument("--sampler",        default="euler")
     parser.add_argument("--num_steps",      type=int, default=100,
@@ -242,6 +289,18 @@ def main():
                         help="Set if inference was run with --reground_fixed_enc_noise.")
     parser.add_argument("--reground_fixed_cond_noise", action="store_true", default=False,
                         help="Set if inference was run with --reground_fixed_cond_noise.")
+    parser.add_argument("--reground_shared_noise", action="store_true", default=False,
+                        help="Set if inference was run with --reground_shared_noise.")
+    parser.add_argument("--recycle_t_fix", type=float, default=None,
+                        help="t_fix for recycle mode (e.g. 0.9).")
+    parser.add_argument("--cfg_scale", type=float, default=1.0,
+                        help="CFG scale used at inference (default 1.0 = off). "
+                             "When >1.0, only folders with the matching -cfgX.XX "
+                             "tag are considered.")
+    parser.add_argument("--hidden_rep_guidance", type=float, default=1.0,
+                        help="Hidden representation guidance scale (default 1.0 = off). "
+                             "When >1.0, only folders with the matching -hrgX.X "
+                             "tag are considered.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -258,7 +317,11 @@ def main():
                            encode_fixed_start_t=args.encode_fixed_start_t,
                            encode_reground_t_fix=args.encode_reground_t_fix,
                            reground_fixed_enc_noise=args.reground_fixed_enc_noise,
-                           reground_fixed_cond_noise=args.reground_fixed_cond_noise)
+                           reground_fixed_cond_noise=args.reground_fixed_cond_noise,
+                           reground_shared_noise=args.reground_shared_noise,
+                           recycle_t_fix=args.recycle_t_fix,
+                           cfg_scale=args.cfg_scale,
+                           hidden_rep_guidance=args.hidden_rep_guidance)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -289,6 +352,10 @@ def main():
         "encode_reground_t_fix":  args.encode_reground_t_fix,
         "reground_fixed_enc_noise":  args.reground_fixed_enc_noise,
         "reground_fixed_cond_noise": args.reground_fixed_cond_noise,
+        "reground_shared_noise":    args.reground_shared_noise,
+        "recycle_t_fix":          args.recycle_t_fix,
+        "cfg_scale":              args.cfg_scale,
+        "hidden_rep_guidance":    args.hidden_rep_guidance,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

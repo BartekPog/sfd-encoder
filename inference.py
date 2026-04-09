@@ -120,7 +120,9 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
               hidden_rep_guidance=1.0,
               encode_first_pass=False, encode_linear_start_t=None,
               encode_fixed_start_t=None, encode_reground_t_fix=None,
-              reground_fixed_enc_noise=False, reground_fixed_cond_noise=False):
+              reground_fixed_enc_noise=False, reground_fixed_cond_noise=False, reground_shared_noise=False,
+              recycle_t_fix=None,
+              save_samples=None):
     """
     Run sampling.
     """
@@ -131,6 +133,12 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         cfg_interval_start = train_config['sample']['cfg_interval_start'] if 'cfg_interval_start' in train_config['sample'] else 0
     if timestep_shift is None:
         timestep_shift = train_config['sample']['timestep_shift'] if 'timestep_shift' in train_config['sample'] else 0
+
+    # save_samples mode: generate only N images for qualitative comparison
+    if save_samples is not None:
+        fid_num = save_samples
+        if train_config['sample']['per_proc_batch_size'] > save_samples:
+            train_config['sample']['per_proc_batch_size'] = save_samples
 
     # Override fid_num if specified
     if fid_num is not None:
@@ -229,12 +237,18 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             folder_name += "-fixenc"
         if reground_fixed_cond_noise:
             folder_name += "-fixcond"
+        if reground_shared_noise:
+            folder_name += "-sharednoise"
+    if recycle_t_fix is not None:
+        folder_name += f"-recycle{recycle_t_fix:.2f}"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
     # Add separate sem/tex cfg scale to folder name (only if different from default)
     if use_autoguidance and (cfg_scale_sem is not None or cfg_scale_tex is not None):
         folder_name += f"-cfgsem{effective_cfg_sem:.2f}-cfgtex{effective_cfg_tex:.2f}"
+    if save_samples is not None:
+        folder_name += f"-save{save_samples}"
 
     if demo_sample_mode:
         cfg_interval_start = 0
@@ -586,13 +600,43 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             hidden_rep_guidance=hidden_rep_guidance,
             reground_fixed_enc_noise=reground_fixed_enc_noise,
             reground_fixed_cond_noise=reground_fixed_cond_noise,
+            reground_shared_noise=reground_shared_noise,
         )
         if accelerator.process_index == 0:
             print_with_prefix(f'Encode-reground mode: re-encode h_clean from x_t at each step, '
                               f't_fix={encode_reground_t_fix:.2f}, '
                               f'normalize_hidden={normalize_hidden}, '
                               f'fixed_enc_noise={reground_fixed_enc_noise}, '
-                              f'fixed_cond_noise={reground_fixed_cond_noise}')
+                              f'fixed_cond_noise={reground_fixed_cond_noise}, '
+                              f'shared_noise={reground_shared_noise}')
+
+    # Recycle mode: single forward pass per step, hidden velocity used to extract
+    # h_clean which is re-noised back to recycle_t_fix. No extra forward pass needed.
+    sample_fn_recycle = None
+    if recycle_t_fix is not None:
+        assert use_hidden and use_semantic_first, \
+            "Recycle mode requires hidden tokens and semantic-first mode"
+        normalize_hidden = train_config['model'].get('normalize_hidden', True)
+        sample_fn_recycle = sampler.sample_ode_semantic_first_hidden(
+            sampling_method=train_config['sample']['sampling_method'],
+            num_steps=train_config['sample']['num_sampling_steps'],
+            atol=train_config['sample']['atol'],
+            rtol=train_config['sample']['rtol'],
+            reverse=train_config['sample']['reverse'],
+            timestep_shift=timestep_shift,
+            semfirst_delta_t=semfirst_delta_t,
+            semantic_chans=semantic_chans,
+            num_hidden_tokens=model.num_hidden_tokens,
+            hidden_token_dim=model.hidden_token_dim,
+            hidden_schedule="recycle",
+            recycle_t_fix=recycle_t_fix,
+            normalize_hidden=normalize_hidden,
+            hidden_sphere_clamp=hidden_sphere_clamp,
+            hidden_rep_guidance=hidden_rep_guidance,
+        )
+        if accelerator.process_index == 0:
+            print_with_prefix(f'Recycle mode: predict h_clean from velocity, re-noise to '
+                              f't_fix={recycle_t_fix:.2f}, normalize_hidden={normalize_hidden}')
 
     if vae is None:
         vae = VA_VAE(
@@ -917,6 +961,35 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                     model_fn = model.forward
 
                 samples = sample_fn_encode_reground(z, model_fn, **model_kwargs)[-1]
+            elif recycle_t_fix is not None:
+                # --- Recycle mode ---
+                # Single forward pass per step; hidden velocity → h_clean → re-noise.
+                if fixed_class_label is not None:
+                    y = torch.tensor([fixed_class_label] * n, device=device)
+                elif use_balanced_sampling:
+                    y_list = []
+                    for sample_idx in range(n):
+                        global_index = sample_idx * accelerator.num_processes + accelerator.process_index + total
+                        if global_index >= fid_num:
+                            y_list.append(torch.randint(0, train_config['data']['num_classes'], (1,), device=device))
+                        else:
+                            y_list.append(balanced_labels[global_index:global_index+1])
+                    y = torch.cat(y_list, dim=0)
+                else:
+                    y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
+
+                if using_cfg:
+                    z = torch.cat([z, z], 0)
+                    y_null = torch.tensor([1000] * n, device=device)
+                    y_cfg = torch.cat([y, y_null], 0)
+                    model_kwargs = dict(y=y_cfg, cfg_scale=cfg_scale, cfg_interval=True,
+                                       cfg_interval_start=cfg_interval_start)
+                    model_fn = model.forward_with_cfg
+                else:
+                    model_kwargs = dict(y=y)
+                    model_fn = model.forward
+
+                samples = sample_fn_recycle(z, model_fn, **model_kwargs)[-1]
             else:
                 # Get labels (fixed, balanced, or random)
                 if fixed_class_label is not None:
@@ -1045,6 +1118,11 @@ if __name__ == "__main__":
                              'image denoising step on the result. No real-image lookup needed. '
                              't_fix=1.0 (default) = fully clean conditioning; 0.0 = no conditioning. '
                              'Sweep values like 0.3, 0.5, 0.7, 0.9, 1.0.')
+    parser.add_argument('--recycle_t_fix', type=float, default=None,
+                        help='Recycle mode: single forward pass per step. Hidden velocity is used '
+                             'to extract h_clean, which is re-noised back to t_fix. The frozen ODE '
+                             'hidden state serves as fixed noise. No extra forward pass needed. '
+                             'Sweep values like 0.5, 0.7, 0.8, 0.9, 1.0.')
     parser.add_argument('--reground_fixed_enc_noise', action='store_true', default=False,
                         help='Encode-reground mode: reuse the same encode-pass noise across all '
                              'ODE steps instead of resampling. Gives a more consistent h_clean '
@@ -1052,9 +1130,16 @@ if __name__ == "__main__":
     parser.add_argument('--reground_fixed_cond_noise', action='store_true', default=False,
                         help='Encode-reground mode: reuse the same conditioning noise (used to '
                              'noise h_clean to t_fix) across all ODE steps.')
+    parser.add_argument('--reground_shared_noise', action='store_true', default=False,
+                        help='Encode-reground mode: use the same noise for encoding and '
+                             'conditioning. Makes xt_h = x0 + t_fix * v_enc, i.e. stopping '
+                             'partway along the encoding flow line. Overrides --reground_fixed_cond_noise.')
     parser.add_argument('--no_cleanup_samples', action='store_true', default=False,
                         help='Keep PNG sample files after FID calculation. By default, PNGs are '
                              'deleted after FID is computed to save disk space.')
+    parser.add_argument('--save_samples', type=int, default=None,
+                        help='Generate only N samples for qualitative comparison. '
+                             'Overrides fid_num and saves PNGs without computing FID.')
     args, unknown = parser.parse_known_args()
     accelerator = Accelerator()
     train_config = load_config(args.config)
@@ -1138,7 +1223,10 @@ if __name__ == "__main__":
         encode_fixed_start_t=args.encode_fixed_start_t,
         encode_reground_t_fix=args.encode_reground_t_fix,
         reground_fixed_enc_noise=args.reground_fixed_enc_noise,
-        reground_fixed_cond_noise=args.reground_fixed_cond_noise)
+        reground_fixed_cond_noise=args.reground_fixed_cond_noise,
+        reground_shared_noise=args.reground_shared_noise,
+        recycle_t_fix=args.recycle_t_fix,
+        save_samples=args.save_samples)
 
     if not args.demo and args.calculate_fid:
         # calculate FID

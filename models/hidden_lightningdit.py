@@ -15,6 +15,28 @@ from .lightningdit import LightningDiT, TimestepEmbedder
 from .pos_embed import rotate_half
 
 
+class _HiddenSafeRoPE(torch.nn.Module):
+    """Applies RoPE only to image tokens, passes hidden tokens through.
+
+    Defined at module level (not inside a method) so its class identity is
+    stable across forward calls. A closure-local class would create a new
+    type identity on every call, invalidating torch.compile's
+    ``___check_type_id`` guard and triggering recompilation of every DiT
+    block on every forward pass.
+    """
+    def __init__(self, n_image, cos, sin):
+        super().__init__()
+        self.n_image = n_image
+        self.cos = cos
+        self.sin = sin
+
+    def forward(self, t):
+        t_img = t[:, :, :self.n_image, :]   # (B, H, n_img, D)
+        t_hid = t[:, :, self.n_image:, :]   # (B, H, n_hid, D)
+        # Inline RoPE with the (cloned) buffers passed in at construction
+        t_img = t_img * self.cos + rotate_half(t_img) * self.sin
+        return torch.cat([t_img, t_hid], dim=2)
+
 
 class HiddenLightningDiT(LightningDiT):
     def __init__(
@@ -127,21 +149,7 @@ class HiddenLightningDiT(LightningDiT):
         # Clone once per forward call; all 28 blocks share these cloned tensors
         freqs_cos = rope.freqs_cos.clone()
         freqs_sin = rope.freqs_sin.clone()
-        
-        class _HiddenSafeRoPE(torch.nn.Module):
-            """Applies RoPE only to image tokens, passes hidden tokens through."""
-            def __init__(self, n_image, cos, sin):
-                super().__init__()
-                self.n_image = n_image
-                self.cos = cos
-                self.sin = sin
-            def forward(self, t):
-                t_img = t[:, :, :self.n_image, :]   # (B, H, n_img, D)
-                t_hid = t[:, :, self.n_image:, :]   # (B, H, n_hid, D)
-                # Inline RoPE with cloned buffers
-                t_img = t_img * self.cos + rotate_half(t_img) * self.sin
-                return torch.cat([t_img, t_hid], dim=2)
-        
+
         return _HiddenSafeRoPE(n_img, freqs_cos, freqs_sin)
 
     def forward(self, x, t=None, y=None, x_hidden=None, t_hidden=None,

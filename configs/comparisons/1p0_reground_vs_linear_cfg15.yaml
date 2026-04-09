@@ -1,0 +1,41 @@
+# 1p0B comparison grid WITH classifier-free guidance (cfg_scale=1.5).
+# Same experiments as 1p0_reground_vs_linear_nocfg.yaml, with --cfg_scale 1.5
+# added to every experiment. Autoguidance is NOT used.
+#
+# The 1.5 value matches the 1p0B README table's best-FID CFG setting
+# (configs/sfd/lightningdit_1p0/inference_4m_autoguidance.yaml).
+#
+# Usage:
+#   bash run_compare_samples.sh configs/comparisons/1p0_reground_vs_linear_cfg15.yaml
+
+num_samples: 10
+num_steps: 100
+seed: 0
+comparison_name: 1p0_reground_vs_linear_cfg15
+output_dir: outputs/comparisons
+
+experiments:
+  - label: "Baseline (no FT) @ 4M — cfg1.5"
+    config: configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden.yaml
+    ckpt_path: outputs/train/sfd_1p0/checkpoints/4000000.pt
+    extra_args: "--cfg_scale 1.5"
+
+  - label: "Baseline FT @ 40K — cfg1.5"
+    config: configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden.yaml
+    ckpt_step: 40000
+    extra_args: "--cfg_scale 1.5"
+
+  - label: "Ours @ 40K — Linear — cfg1.5"
+    config: configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 40000
+    extra_args: "--cfg_scale 1.5 --hidden_schedule linear --hidden_sphere_clamp"
+
+  - label: "Ours @ 40K — Reground t=0.9 — cfg1.5"
+    config: configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 40000
+    extra_args: "--cfg_scale 1.5 --encode_reground_t_fix 0.9 --hidden_sphere_clamp --reground_fixed_enc_noise"
+
+  - label: "Ours @ 40K — Reground t=0.8 — cfg1.5"
+    config: configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 40000
+    extra_args: "--cfg_scale 1.5 --encode_reground_t_fix 0.8 --hidden_sphere_clamp --reground_fixed_enc_noise"

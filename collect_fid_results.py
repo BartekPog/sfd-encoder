@@ -31,6 +31,8 @@ COLUMN_ORDER = [
     "encode_reground_t_fix",
     "reground_fixed_enc_noise",
     "reground_fixed_cond_noise",
+    "reground_shared_noise",
+    "recycle_t_fix",
     # architecture
     "model_type",
     "use_hidden_tokens",

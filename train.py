@@ -153,7 +153,8 @@ def do_train(train_config, accelerator):
         # Handle checkpoints that only have 'ema' key (no 'model' key)
         if 'model' not in checkpoint and 'ema' in checkpoint:
             checkpoint['model'] = checkpoint['ema']
-            logger.info(f"Checkpoint {train_config['train']['weight_init']} contains only EMA weights; using them to initialize the model.")
+            if accelerator.is_main_process:
+                logger.info(f"Checkpoint {train_config['train']['weight_init']} contains only EMA weights; using them to initialize the model.")
         # remove the prefix 'module.' from the keys
         checkpoint['model'] = {k.replace('module.', ''): v for k, v in checkpoint['model'].items()}
         model = load_weights_with_shape_check(model, checkpoint, rank=rank)

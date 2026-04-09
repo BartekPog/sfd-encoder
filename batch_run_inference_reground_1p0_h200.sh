@@ -1,17 +1,11 @@
 #!/bin/bash
 # =============================================================================
-# batch_run_inference_reground_b_h200.sh
+# batch_run_inference_reground_1p0_h200.sh
 #
-# Encode-reground FID50K inference for B-size H200 hidden-token experiments.
-#
-# At every ODE step the model re-encodes hidden tokens from the current noisy
-# image x_t (Pass-1 style: pure-noise hidden input, t_hid=0), recovers h_clean,
-# noises it to t_hid_fix, and uses the result to condition the image denoising
-# step.  This lets hidden tokens track the evolving image state rather than
-# committing to a fixed encoding at the start.
+# Encode-reground FID50K inference for 1p0B H200 hidden-token experiments.
 #
 # Usage:
-#   bash batch_run_inference_reground_b_h200.sh [ckpt_step]
+#   bash batch_run_inference_reground_1p0_h200.sh [ckpt_step]
 #
 # Arguments:
 #   ckpt_step  — checkpoint step to evaluate (default: 40000)
@@ -24,13 +18,12 @@
 #                          Uses the ramped weight w(t_h) = 1 + (s - 1) * t_h.
 #
 # Examples:
-#   CFG_SCALE=1.5 bash batch_run_inference_reground_b_h200.sh
-#   HIDDEN_REP_GUIDANCE=2.0 bash batch_run_inference_reground_b_h200.sh
-#   CFG_SCALE=1.5 HIDDEN_REP_GUIDANCE=2.0 bash batch_run_inference_reground_b_h200.sh
+#   CFG_SCALE=1.5 bash batch_run_inference_reground_1p0_h200.sh
+#   HIDDEN_REP_GUIDANCE=2.0 bash batch_run_inference_reground_1p0_h200.sh
+#   CFG_SCALE=1.5 HIDDEN_REP_GUIDANCE=2.0 bash batch_run_inference_reground_1p0_h200.sh
 #
 # All experiments use:  Euler sampler, FID50K,
 #                       --encode_reground_t_fix <sweep> --hidden_sphere_clamp
-#                       num_steps swept over NUM_STEPS_VALUES
 # =============================================================================
 
 set -euo pipefail
@@ -39,13 +32,13 @@ CKPT_STEP=${1:-60000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
-TIME=${TIME:-"00-4:00:00"}
+TIME=${TIME:-"00-8:00:00"}
 NUM_GPUS=1
 GPUS="h200:${NUM_GPUS}"
 MEM="180G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
-PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-1024}  # default 512; override: PER_PROC_BATCH_SIZE=256 bash ...
+PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-512}
 
 # ---- Guidance overrides (off by default; matches SFD best-FID setup when enabled) ----
 CFG_SCALE=${CFG_SCALE:-1.0}                       # 1.0 = off; 1.5 = SFD best
@@ -68,52 +61,28 @@ fi
 # ---- Inference output directory ----
 INFERENCE_OUTPUT_DIR="outputs/inference"
 
-# ---- Number of ODE steps to sweep ----
-NUM_STEPS_VALUES=(100) #*2 inference steps because of the regrounding (each step has a Pass-1 re-encode + Pass-2 denoise)
+# ---- Number of ODE steps ----
+NUM_STEPS_VALUES=(100)
 
 # ---- t_fix values to sweep ----
-# 1.0 = fully clean conditioning (default), 0.0 = no conditioning (ablation)
-# T_FIX_VALUES=(0.7 0.9 0.95 1.0)
-T_FIX_VALUES=(0.8 0.85 0.88 0.9 1.0)
-# T_FIX_VALUES=(0.9 0.95 1.0)
+# T_FIX_VALUES=(0.8 0.85 0.88 0.9 0.92)
+T_FIX_VALUES=( 0.5 0.6 0.75 0.8 0.85 0.9)
 
 # ---- Fixed-noise flags for reground ----
-# When true, the encode / conditioning noise is sampled once and reused across
-# all ODE steps instead of being resampled each step.
-# REGROUND_FIXED_ENC_NOISE=${REGROUND_FIXED_ENC_NOISE:-false}
-REGROUND_FIXED_ENC_NOISE=${REGROUND_FIXED_ENC_NOISE:-false}
+REGROUND_FIXED_ENC_NOISE=${REGROUND_FIXED_ENC_NOISE:-true} # Here we keep the encoder noise fixed to isolate the effect of the reground noise
 REGROUND_FIXED_COND_NOISE=${REGROUND_FIXED_COND_NOISE:-false}
-# When true, use the same noise for encoding and conditioning (xt_h = x0 + t_fix * v_enc).
 REGROUND_SHARED_NOISE=${REGROUND_SHARED_NOISE:-false}
 
 # ---- Hidden-token experiment definitions ----
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
 EXPERIMENTS=(
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1_repg_1p5"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
-
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
-    # "configs/sfd/hidden_b_h200_from_ft/e1_clean_enc_drop03_no_p3.yaml|e1_clean_enc_drop03_no_p3"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_cos001_noisy_enc_curriculum_repg_1p5.yaml|v4_mse001_cos001_noisy_enc_curriculum_repg_1p5"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_curriculum_repg_1p5_no_hloss.yaml|v4_noisy_enc_curriculum_repg_1p5_no_hloss"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
-
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1_repg_1p5"
-
-    "configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_nocurr_shift1_repg_1p5_no_hloss.yaml|v4_noisy_enc_nocurr_shift1_repg_1p5_no_hloss"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift0p5_repg_1p5.yaml|v4_mse0001_noisy_enc_nocurr_shift0p5_repg_1p5"
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5"
-    
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5"
+    "configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml|1p0_v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5"
 )
 
 echo "============================================="
-echo "  B-size H200 — FID50K Inference (ENCODE-REGROUND + SPHERE CLAMP)"
+echo "  1p0B H200 — FID50K Inference (ENCODE-REGROUND + SPHERE CLAMP)"
 echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
 echo "  Sampler: Euler"
-echo "  Mode: re-encode h_clean from x_t at every ODE step → condition image step"
 echo "  Steps sweep: ${NUM_STEPS_VALUES[*]}"
 echo "  t_fix sweep: ${T_FIX_VALUES[*]}"
 echo "  Fixed enc noise: ${REGROUND_FIXED_ENC_NOISE}"
@@ -121,6 +90,7 @@ echo "  Fixed cond noise: ${REGROUND_FIXED_COND_NOISE}"
 echo "  Shared noise: ${REGROUND_SHARED_NOISE}"
 echo "  CFG scale: ${CFG_SCALE}"
 echo "  Hidden rep guidance: ${HIDDEN_REP_GUIDANCE}"
+echo "  Batch size: ${PER_PROC_BATCH_SIZE}"
 echo "  GPUs: ${NUM_GPUS} x H200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
 echo "============================================="
@@ -130,7 +100,6 @@ SUBMITTED=0
 
 for NUM_STEPS in "${NUM_STEPS_VALUES[@]}"; do
 for T_FIX in "${T_FIX_VALUES[@]}"; do
-    # Format values for filenames (e.g. t_fix=1.00 → 100, steps=100 → s100)
     T_FIX_TAG=$(printf "%.2f" "${T_FIX}" | tr -d '.')
 
     for ENTRY in "${EXPERIMENTS[@]}"; do
@@ -167,14 +136,14 @@ for T_FIX in "${T_FIX_VALUES[@]}"; do
             FIXNOISE_TAG+="_shared"
         fi
 
-        JOBSCRIPT="jobs/infer_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
-        OUTPUT="job_outputs/infer_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
+        JOBSCRIPT="jobs/infer_1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
+        OUTPUT="job_outputs/infer_1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
         mkdir -p "$(dirname "${JOBSCRIPT}")"
         mkdir -p "$(dirname "${OUTPUT}")"
 
         cat > "${JOBSCRIPT}" <<SLURM_EOF
 #!/bin/bash
-#SBATCH --job-name rg_s${NUM_STEPS}_t${T_FIX_TAG}
+#SBATCH --job-name 1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}
 #SBATCH --output ${OUTPUT}
 #SBATCH --time ${TIME}
 #SBATCH --nodes=1
@@ -227,6 +196,6 @@ done
 
 echo ""
 echo "============================================="
-echo "  Submitted ${SUBMITTED} encode-reground inference jobs."
+echo "  Submitted ${SUBMITTED} encode-reground inference jobs (1p0B)."
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="

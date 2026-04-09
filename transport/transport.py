@@ -1445,6 +1445,9 @@ class Sampler:
         normalize_hidden=True,
         reground_fixed_enc_noise=False,
         reground_fixed_cond_noise=False,
+        reground_shared_noise=False,
+        recycle_t_fix=None,
+        collect_hidden_trajectory=False,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -1468,6 +1471,11 @@ class Sampler:
                   denoising step on the recovered h_clean (optionally noised to hidden_reground_t_fix).
                   This allows hidden tokens to track the image as it is denoised.
                   Two model calls per step; hidden ODE state is never updated.
+                - "recycle": Single forward pass per step. The model sees hidden tokens at a fixed
+                  noise level recycle_t_fix and predicts velocity for both image and hidden. The
+                  hidden velocity is used to extract h_clean, which is then re-noised back to
+                  recycle_t_fix using the frozen ODE hidden state as fixed noise. This lets
+                  h_clean drift to track the evolving image without an extra forward pass.
             hidden_schedule_start_t: Used with "linear_from" and "encode_linear". For "linear_from",
                 hidden tokens are frozen until t_hid would exceed this value. For "encode_linear",
                 this is the starting hidden timestep (noise level of the GT-initialised hidden state).
@@ -1484,10 +1492,19 @@ class Sampler:
                 noise once on the first ODE step and reuse it for all subsequent steps.
             reground_fixed_cond_noise: Only used with "reground". If True, sample the conditioning
                 noise (used to noise h_clean to t_fix) once and reuse it for all subsequent steps.
+            reground_shared_noise: Only used with "reground". If True, use the same noise for both
+                the encode pass and the conditioning re-noising. This makes the conditioning input
+                xt_h = x0 + t_fix * v_enc, i.e. stopping partway along the encoding flow line.
+                Overrides reground_fixed_cond_noise (cond noise is just enc noise).
+            recycle_t_fix: Only used with "recycle". The fixed noise level at which hidden tokens
+                are presented to the model. After each step, h_clean is extracted from the velocity
+                prediction and re-noised back to this level. 1.0 = nearly clean, 0.0 = pure noise.
         """
         t_max = 1.0 + semfirst_delta_t
         texture_chans = None
         _reground_cache = {}
+        _recycle_cache = {}
+        _hidden_trajectory = []  # collects h_clean at each step when enabled
 
         def joint_drift_semantic_first(state, t, model, **model_kwargs):
             """
@@ -1526,9 +1543,13 @@ class Sampler:
                 h_clean = x0_h_enc + enc_result[1]
                 if normalize_hidden:
                     h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                if collect_hidden_trajectory:
+                    _hidden_trajectory.append(h_clean.detach().cpu())
 
                 # Noise h_clean to t_fix level for the conditioning call
-                if reground_fixed_cond_noise and "cond_noise" in _reground_cache:
+                if reground_shared_noise:
+                    x0_h_cond = x0_h_enc
+                elif reground_fixed_cond_noise and "cond_noise" in _reground_cache:
                     x0_h_cond = _reground_cache["cond_noise"]
                 else:
                     x0_h_cond = th.randn_like(h_clean)
@@ -1562,6 +1583,57 @@ class Sampler:
                 img_vel = img_vel * img_mask
 
                 # Hidden state not evolved by the ODE (re-encoded fresh each step)
+                return (img_vel, th.zeros_like(x_hidden))
+
+            # ----------------------------------------------------------------
+            # "recycle" schedule: single model call per step.
+            # The model sees hidden tokens at fixed noise level recycle_t_fix.
+            # Hidden velocity is used to extract h_clean, which is re-noised
+            # back to recycle_t_fix using the frozen ODE x_hidden as noise.
+            # ----------------------------------------------------------------
+            if hidden_schedule == "recycle":
+                # Build hidden input: on first call use ODE state (random noise),
+                # on subsequent calls mix cached h_clean with ODE noise at t_fix.
+                if "h_clean" in _recycle_cache:
+                    x_h = recycle_t_fix * _recycle_cache["h_clean"] + (1.0 - recycle_t_fix) * x_hidden
+                else:
+                    x_h = x_hidden  # first step: pure noise
+                t_hid = th.full((B,), recycle_t_fix, device=device)
+
+                # Single model call
+                result = model(x_img, t=t_tuple, x_hidden=x_h,
+                               t_hidden=t_hid, **model_kwargs)
+                img_vel = result[0]
+                hidden_vel = result[1]
+
+                # Extract h_clean from velocity: x_1 = x_t + (1 - t) * v
+                h_clean = x_h + (1.0 - recycle_t_fix) * hidden_vel
+                if normalize_hidden:
+                    h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                _recycle_cache["h_clean"] = h_clean
+                if collect_hidden_trajectory:
+                    _hidden_trajectory.append(h_clean.detach().cpu())
+
+                # Optional hidden-representation guidance
+                if hidden_rep_guidance > 1.0:
+                    h_uncond = th.randn(B, num_hidden_tokens, hidden_token_dim,
+                                        device=device)
+                    t_h_uncond = th.zeros(B, device=device)
+                    result_uncond = model(x_img, t=t_tuple, x_hidden=h_uncond,
+                                          t_hidden=t_h_uncond, **model_kwargs)
+                    img_vel_uncond = result_uncond[0]
+                    w = 1.0 + (hidden_rep_guidance - 1.0) * recycle_t_fix
+                    img_vel = img_vel_uncond + w * (img_vel - img_vel_uncond)
+
+                # Semantic-first image velocity masking
+                img_mask = th.zeros_like(x_img)
+                img_mask[:, :texture_chans, ...] = (t >= semfirst_delta_t).view(
+                    B, 1, *[1] * (x_img.dim() - 2))
+                img_mask[:, -semantic_chans:, ...] = (t <= 1.0).view(
+                    B, 1, *[1] * (x_img.dim() - 2))
+                img_vel = img_vel * img_mask
+
+                # Hidden ODE state is a dummy — return zero velocity
                 return (img_vel, th.zeros_like(x_hidden))
 
             if hidden_schedule == "fixed":
@@ -1640,6 +1712,19 @@ class Sampler:
                 h_clean_clamped = h_clean_pred / h_norms
                 hidden_vel = h_clean_clamped - h_noise_pred
 
+            # Collect h_clean prediction for trajectory analysis
+            if collect_hidden_trajectory and hidden_schedule != "fixed":
+                t_hid_exp_traj = t_hid.view(B, 1, 1)
+                if hidden_sphere_clamp:
+                    # h_clean_clamped already computed above
+                    _hidden_trajectory.append(h_clean_clamped.detach().cpu())
+                else:
+                    h_clean_pred_traj = x_hidden + (1.0 - t_hid_exp_traj) * hidden_vel
+                    if normalize_hidden:
+                        h_clean_pred_traj = h_clean_pred_traj / h_clean_pred_traj.norm(
+                            dim=-1, keepdim=True).clamp(min=1e-6)
+                    _hidden_trajectory.append(h_clean_pred_traj.detach().cpu())
+
             # Hidden velocity masking
             if hidden_schedule == "fixed":
                 hidden_vel = th.zeros_like(hidden_vel)
@@ -1681,9 +1766,14 @@ class Sampler:
             Special kwargs (popped before forwarding to model):
                 _z_hidden: (B, num_hidden_tokens, hidden_token_dim) override initial hidden state
                 _return_hidden: if True, return [img_final, h_final] instead of [img_final]
+                _return_trajectory: if True, append the h_clean trajectory list as the last element
             """
             _z_hidden = model_kwargs.pop('_z_hidden', None)
             _return_hidden = model_kwargs.pop('_return_hidden', False)
+            _return_trajectory = model_kwargs.pop('_return_trajectory', False)
+
+            # Clear trajectory from any previous call
+            _hidden_trajectory.clear()
 
             B = z_img.shape[0]
             device = z_img.device
@@ -1701,9 +1791,13 @@ class Sampler:
                 img_final = samples[-1]
                 h_final = None
 
+            result = [img_final]
             if _return_hidden:
-                return [img_final, h_final]
-            return [img_final]
+                result.append(h_final)
+            if _return_trajectory and _hidden_trajectory:
+                # Stack into (num_steps, B, num_tokens, dim)
+                result.append(th.stack(_hidden_trajectory, dim=0))
+            return result
 
         return _sample_fn
 

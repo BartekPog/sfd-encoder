@@ -13,13 +13,25 @@
 # Arguments:
 #   ckpt_step  — checkpoint step to evaluate (default: 80000)
 #
-# All experiments use:  Euler sampler, 100 steps, cfg_scale=1.0, FID50K,
+# Optional env overrides (guidance benchmarks):
+#   CFG_SCALE            — classifier-free guidance scale (default 1.0 = off).
+#                          Set to 1.5 to match the best SFD setup from the
+#                          README tables (XL 800ep / XXL 80ep / XXL 800ep).
+#   HIDDEN_REP_GUIDANCE  — hidden representation guidance scale (default 1.0 = off).
+#                          Uses the ramped weight w(t_h) = 1 + (s - 1) * t_h.
+#
+# Examples:
+#   CFG_SCALE=1.5 bash batch_run_inference_linear_hidden_b_h200_sphereclamp.sh
+#   HIDDEN_REP_GUIDANCE=2.0 bash batch_run_inference_linear_hidden_b_h200_sphereclamp.sh
+#   CFG_SCALE=1.5 HIDDEN_REP_GUIDANCE=2.0 bash batch_run_inference_linear_hidden_b_h200_sphereclamp.sh
+#
+# All experiments use:  Euler sampler, 100 steps, FID50K,
 #                       hidden_schedule=linear, hidden_sphere_clamp=true
 # =============================================================================
 
 set -euo pipefail
 
-CKPT_STEP=${1:-40000}
+CKPT_STEP=${1:-60000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -30,6 +42,24 @@ MEM="180G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
 PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-1024}  # default 512; override: PER_PROC_BATCH_SIZE=256 bash ...
+
+# ---- Guidance overrides (off by default; matches SFD best-FID setup when enabled) ----
+CFG_SCALE=${CFG_SCALE:-1.0}                       # 1.0 = off; 1.5 = SFD best
+HIDDEN_REP_GUIDANCE=${HIDDEN_REP_GUIDANCE:-1.0}   # 1.0 = off; e.g. 2.0 or 4.0 enables rep guidance
+
+GUIDE_INFER_FLAGS=""
+GUIDE_SAVE_FLAGS=""
+GUIDE_TAG=""
+if (( $(echo "${CFG_SCALE} > 1.0" | bc -l) )); then
+    GUIDE_INFER_FLAGS+=" --cfg_scale ${CFG_SCALE}"
+    GUIDE_SAVE_FLAGS+=" --cfg_scale ${CFG_SCALE}"
+    GUIDE_TAG+="_cfg$(printf '%.2f' ${CFG_SCALE} | tr -d '.')"
+fi
+if (( $(echo "${HIDDEN_REP_GUIDANCE} > 1.0" | bc -l) )); then
+    GUIDE_INFER_FLAGS+=" --hidden_rep_guidance ${HIDDEN_REP_GUIDANCE}"
+    GUIDE_SAVE_FLAGS+=" --hidden_rep_guidance ${HIDDEN_REP_GUIDANCE}"
+    GUIDE_TAG+="_hrg$(printf '%.1f' ${HIDDEN_REP_GUIDANCE} | tr -d '.')"
+fi
 
 # ---- Inference output directory ----
 INFERENCE_OUTPUT_DIR="outputs/inference"
@@ -108,11 +138,11 @@ EXPERIMENTS=(
 
 
     # For now only run at 20K, 40K, but 60K still not done
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1_repg_1p5"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
-    # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1_repg_1p5"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml|v4_mse001_noisy_enc_nocurr_shift1p5_repg_1p5"
+    "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5"
 
-    "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged"
+    # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged"
 )
 
 echo "============================================="
@@ -120,6 +150,8 @@ echo "  B-size H200 — FID50K Inference (LINEAR hidden schedule + SPHERE CLAMP)
 echo "  Checkpoint step: ${CKPT_STEP} (${CKPT_NAME}.pt)"
 echo "  Sampler: Euler, 100 steps"
 echo "  Hidden schedule: linear + sphere-clamping"
+echo "  CFG scale: ${CFG_SCALE}"
+echo "  Hidden rep guidance: ${HIDDEN_REP_GUIDANCE}"
 echo "  GPUs: ${NUM_GPUS} x H200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
 echo "============================================="
@@ -140,8 +172,8 @@ for ENTRY in "${EXPERIMENTS[@]}"; do
 
     INFER_EXP_NAME="${TRAIN_EXP_NAME}_${EXP_CKPT_NAME}"
     EXP_LABEL=$(basename "${CONFIG_PATH}" .yaml)
-    JOBSCRIPT="jobs/infer_linsc_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
-    OUTPUT="job_outputs/infer_linsc_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
+    JOBSCRIPT="jobs/infer_linsc${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
+    OUTPUT="job_outputs/infer_linsc${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
     mkdir -p "$(dirname "${JOBSCRIPT}")"
     mkdir -p "$(dirname "${OUTPUT}")"
 
@@ -177,15 +209,15 @@ GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
     train.output_dir=${INFERENCE_OUTPUT_DIR} \\
     train.exp_name=${INFER_EXP_NAME} \\
     --hidden_schedule linear \\
-    --hidden_sphere_clamp
-python save_fid_result.py \
-    --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \
-    --config     ${CONFIG_PATH} \
-    --ckpt_step  ${EXP_CKPT_STEP} \
-    --inference_type linear \
-    --sampler euler \
-    --num_steps 100 \
-    --hidden_sphere_clamp
+    --hidden_sphere_clamp${GUIDE_INFER_FLAGS}
+python save_fid_result.py \\
+    --output_dir ${INFERENCE_OUTPUT_DIR}/${INFER_EXP_NAME} \\
+    --config     ${CONFIG_PATH} \\
+    --ckpt_step  ${EXP_CKPT_STEP} \\
+    --inference_type linear \\
+    --sampler euler \\
+    --num_steps 100 \\
+    --hidden_sphere_clamp${GUIDE_SAVE_FLAGS}
 echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
 SLURM_EOF
 

@@ -1,0 +1,33 @@
+# Example comparison config: reground vs recycle vs linear
+# Usage: python compare_samples.py configs/comparisons/example_reground_vs_recycle.yaml
+
+num_samples: 10
+num_steps: 100
+seed: 0
+comparison_name: reground_vs_recycle_60k
+output_dir: outputs/comparisons
+
+experiments:
+  - label: "Linear"
+    config: configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 60000
+    extra_args: "--hidden_sphere_clamp"
+
+  - label: "Reground t=0.9"
+    config: configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 60000
+    extra_args: "--encode_reground_t_fix 0.9 --hidden_sphere_clamp --reground_shared_noise --reground_fixed_enc_noise"
+
+  - label: "Reground t=0.85"
+    config: configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 60000
+    extra_args: "--encode_reground_t_fix 0.85 --hidden_sphere_clamp --reground_shared_noise --reground_fixed_enc_noise"
+
+  - label: "Recycle t=0.5"
+    config: configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml
+    ckpt_step: 60000
+    extra_args: "--recycle_t_fix 0.5 --hidden_sphere_clamp"
+
+  - label: "No hidden baseline"
+    config: configs/sfd/hidden_b_h200/v2_finetune_no_hidden.yaml
+    ckpt_step: 1640000
