@@ -373,23 +373,34 @@ echo ""
 
 # ---- HGD-only (no training-time repg) — for test-time guidance compatibility ----
 
-echo ">>> No repg + HGD 2.0: No Curriculum, MSE 0.0001, Shift 1.5"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_2.yaml "${NUM_CHAINS}" 2
+# echo ">>> No repg + HGD 2.0: No Curriculum, MSE 0.0001, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_2.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> No repg + HGD 4.0: No Curriculum, MSE 0.0001, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_4.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> No repg + HGD 5.0: No Curriculum, MSE 0.0001, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# ---- Hidden-dropout + sync class-dropout FT (continue from 20K → +40K = 60K total) ----
+# Tests fix for OOD-unconditional / class-leak via hidden tokens. Both branches eval'd
+# (training-repg may interact differently with hidden dropout than no-repg).
+
+echo ">>> Repg 1.5 + HGD 2.0 + hidden_dropout 0.1 + sync class drop — FT from 20K"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5_hgd_2_hdrop0p1_sync_from20k.yaml "${NUM_CHAINS}" 2
 echo ""
 
-echo ">>> No repg + HGD 4.0: No Curriculum, MSE 0.0001, Shift 1.5"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_4.yaml "${NUM_CHAINS}" 2
-echo ""
-
-echo ">>> No repg + HGD 5.0: No Curriculum, MSE 0.0001, Shift 1.5"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_5.yaml "${NUM_CHAINS}" 2
+echo ">>> No repg + HGD 5.0 + hidden_dropout 0.1 + sync class drop — FT from 20K"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_5_hdrop0p1_sync_from20k.yaml "${NUM_CHAINS}" 2
 echo ""
 
 echo "============================================="
 echo "  All V2/V4/V4.1 experiments submitted!"
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="
-
 
 
 
