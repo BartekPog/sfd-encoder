@@ -145,6 +145,7 @@ def do_train(train_config, accelerator):
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
 
     # load pretrained model
+    weight_init_opt_state = None  # stash opt state for later (optimizer not yet created)
     if 'weight_init' in train_config['train']:
         checkpoint = load_checkpoint_trusted(
             train_config['train']['weight_init'],
@@ -158,7 +159,17 @@ def do_train(train_config, accelerator):
         # remove the prefix 'module.' from the keys
         checkpoint['model'] = {k.replace('module.', ''): v for k, v in checkpoint['model'].items()}
         model = load_weights_with_shape_check(model, checkpoint, rank=rank)
-        ema = load_weights_with_shape_check(ema, checkpoint, rank=rank)
+        # Initialize EMA from ema weights if available (better quality), else from model weights
+        if 'ema' in checkpoint and checkpoint['ema'] is not checkpoint['model']:
+            ema_checkpoint = {'model': {k.replace('module.', ''): v for k, v in checkpoint['ema'].items()}}
+            ema = load_weights_with_shape_check(ema, ema_checkpoint, rank=rank)
+            if accelerator.is_main_process:
+                logger.info("Initialized EMA from checkpoint's EMA weights (separate from training model)")
+        else:
+            ema = load_weights_with_shape_check(ema, checkpoint, rank=rank)
+        # Stash optimizer state if available (applied after optimizer creation)
+        if 'opt' in checkpoint:
+            weight_init_opt_state = checkpoint['opt']
         if accelerator.is_main_process:
             logger.info(f"Loaded pretrained model from {train_config['train']['weight_init']}")
     requires_grad(ema, False)
@@ -215,7 +226,18 @@ def do_train(train_config, accelerator):
         if semfirst_delta_t > 0 and semantic_chans > 0:
             logger.info(f'Semantic First enabled: delta_t={semfirst_delta_t}')
     opt = torch.optim.AdamW(opt_params, lr=train_config['optimizer']['lr'], weight_decay=0, betas=(0.9, train_config['optimizer']['beta2']))
-    
+
+    # Restore optimizer state from weight_init checkpoint (if available)
+    if weight_init_opt_state is not None:
+        try:
+            opt.load_state_dict(weight_init_opt_state)
+            if accelerator.is_main_process:
+                logger.info("Restored optimizer state from weight_init checkpoint")
+        except (ValueError, KeyError) as e:
+            if accelerator.is_main_process:
+                logger.warning(f"Could not restore optimizer state from weight_init (param groups differ): {e}")
+        weight_init_opt_state = None  # free memory
+
     # Setup data
     dataset = ImgLatentDataset(
         data_dir=train_config['data']['data_path'],
@@ -311,6 +333,10 @@ def do_train(train_config, accelerator):
             if any(k.startswith('module.') for k in ema_state):
                 ema_state = {k.replace('module.', '', 1): v for k, v in ema_state.items()}
             ema.load_state_dict(ema_state)
+            if 'opt' in checkpoint:
+                opt.load_state_dict(checkpoint['opt'])
+                if accelerator.is_main_process:
+                    logger.info(f"Restored optimizer state from checkpoint")
             train_steps = checkpoint.get('train_steps')
             if train_steps is None:
                 base = os.path.basename(latest_checkpoint).split('.')[0]
@@ -347,6 +373,18 @@ def do_train(train_config, accelerator):
     log_steps = 0
     running_loss = 0
     start_time = time()
+
+    # LR warmup scheduler
+    lr_warmup_steps = train_config['optimizer'].get('lr_warmup_steps', 0)
+    if lr_warmup_steps > 0:
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            opt, lr_lambda=lambda step: min(1.0, step / lr_warmup_steps),
+            last_epoch=train_steps - 1 if train_steps > 0 else -1
+        )
+        if accelerator.is_main_process:
+            logger.info(f"LR warmup: {lr_warmup_steps} steps, current step: {train_steps}, current LR: {scheduler.get_last_lr()[0]:.2e}")
+    else:
+        scheduler = None
     use_checkpoint = train_config['train']['use_checkpoint'] if 'use_checkpoint' in train_config['train'] else True
     ckpt_every = train_config['train'].get('ckpt_every', 0)
     ckpt_last_every = train_config['train'].get('ckpt_last_every', ckpt_every)
@@ -431,6 +469,7 @@ def do_train(train_config, accelerator):
                             hidden_guidance_scale=hidden_guidance_scale,
                             hidden_reuse_noise_pass2=hidden_reuse_noise_pass2,
                             hidden_reuse_noise_pass3=hidden_reuse_noise_pass3,
+                            sync_class_dropout=train_config['model'].get('sync_class_dropout', False),
                         )
                     else:
                         # 3-pass variant: detached hidden denoising (original)
@@ -463,6 +502,7 @@ def do_train(train_config, accelerator):
                             hidden_reuse_noise_pass3=hidden_reuse_noise_pass3,
                             hidden_clean_only_pass2=train_config['model'].get('hidden_clean_only_pass2', False),
                             hidden_dropout_prob=train_config['model'].get('hidden_dropout_prob', 0.0),
+                            sync_class_dropout=train_config['model'].get('sync_class_dropout', False),
                             encoder_model=encoder_model,
                         )
                 else:
@@ -501,6 +541,8 @@ def do_train(train_config, accelerator):
             # Only update EMA and count steps when gradients are actually synced
             if accelerator.sync_gradients:
                 update_ema(ema, model.module if hasattr(model, 'module') else model)
+                if scheduler is not None:
+                    scheduler.step()
 
                 # Log loss values:
                 if 'cos_loss' in loss_dict and 'repa_loss' in loss_dict:
@@ -559,6 +601,8 @@ def do_train(train_config, accelerator):
                                     wandb_losses['use_encode_mode_emb'] = True
                                 if hidden_guidance_scale > 1.0:
                                     wandb_losses['hidden_guidance_scale'] = hidden_guidance_scale
+                            if scheduler is not None:
+                                wandb_losses['learning_rate'] = scheduler.get_last_lr()[0]
                             # print(wandb_losses)
                             wandb.log(wandb_losses, step=train_steps)
                     # Reset monitoring variables:

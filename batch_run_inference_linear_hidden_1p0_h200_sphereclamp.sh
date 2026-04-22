@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-60000}
+CKPT_STEP=${1:-80000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -42,7 +42,7 @@ GPUS="h200:${NUM_GPUS}"
 MEM="180G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
-PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-512}
+PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-2048}
 
 # ---- Guidance overrides (off by default; matches SFD best-FID setup when enabled) ----
 CFG_SCALE=${CFG_SCALE:-1.0}                       # 1.0 = off; 1.5 = SFD best
@@ -82,7 +82,7 @@ BASELINE_EXPERIMENTS=(
     # Original pretrained SFD 1p0B (4M steps)
     # "configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden.yaml|sfd_1p0|4000000"
     # Finetuned SFD 1p0B (no hidden tokens, 40K steps from 4M)
-    "configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden.yaml|1p0_finetune_no_hidden|60000"
+    "configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden.yaml|1p0_finetune_no_hidden|80000"
 )
 
 # ---- Hidden-token experiments (linear schedule + sphere clamp) ----

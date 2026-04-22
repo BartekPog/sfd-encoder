@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-NUM_CHAINS=${1:-3}
+NUM_CHAINS=${1:-6}
 
 echo "============================================="
 echo "  V2 Experiments on H200"
@@ -327,16 +327,62 @@ echo ""
 # bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml "${NUM_CHAINS}" 2
 # echo ""
 
-echo ">>> V4-NEW: No Curriculum, No Hidden Loss, Shift 1.0, repg 1.5"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_nocurr_shift1_repg_1p5_no_hloss.yaml "${NUM_CHAINS}" 2
+# echo ">>> V4-NEW: No Curriculum, No Hidden Loss, Shift 1.0, repg 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_noisy_enc_nocurr_shift1_repg_1p5_no_hloss.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: No Curriculum, MSE 0.0001, Shift 1.5, repg 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> V4-NEW: No Curriculum, MSE 0.0001, Shift 0.5, repg 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift0p5_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# ---- T-shift sweep (higher shifts) ----
+
+# echo ">>> T-shift 2.0: No Curriculum, MSE 0.0001, Shift 2.0, repg 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift2_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> T-shift 3.0: No Curriculum, MSE 0.0001, Shift 3.0, repg 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift3_repg_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# # ---- Repg + HGD interaction search ----
+
+# echo ">>> Repg 1.2 (no HGD): No Curriculum, MSE 0.0001, Shift 1.5, repg 1.2"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p2.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> Repg 2.0 (no HGD): No Curriculum, MSE 0.0001, Shift 1.5, repg 2.0"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_2.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> Repg 1.5 + HGD 1.5: No Curriculum, MSE 0.0001, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5_hgd_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> Repg 1.5 + HGD 2.0: No Curriculum, MSE 0.0001, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5_hgd_2.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# echo ">>> Repg 2.0 + HGD 1.5: No Curriculum, MSE 0.0001, Shift 1.5"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_2_hgd_1p5.yaml "${NUM_CHAINS}" 2
+# echo ""
+
+# ---- HGD-only (no training-time repg) — for test-time guidance compatibility ----
+
+echo ">>> No repg + HGD 2.0: No Curriculum, MSE 0.0001, Shift 1.5"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_2.yaml "${NUM_CHAINS}" 2
 echo ""
 
-echo ">>> V4-NEW: No Curriculum, MSE 0.0001, Shift 1.5, repg 1.5"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_repg_1p5.yaml "${NUM_CHAINS}" 2
+echo ">>> No repg + HGD 4.0: No Curriculum, MSE 0.0001, Shift 1.5"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_4.yaml "${NUM_CHAINS}" 2
 echo ""
 
-echo ">>> V4-NEW: No Curriculum, MSE 0.0001, Shift 0.5, repg 1.5"
-bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift0p5_repg_1p5.yaml "${NUM_CHAINS}" 2
+echo ">>> No repg + HGD 5.0: No Curriculum, MSE 0.0001, Shift 1.5"
+bash run_train_slurm_h200.sh configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1p5_no_repg_hgd_5.yaml "${NUM_CHAINS}" 2
 echo ""
 
 echo "============================================="

@@ -93,9 +93,12 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  reground_fixed_enc_noise: bool = False,
                  reground_fixed_cond_noise: bool = False,
                  reground_shared_noise: bool = False,
+                 reground_reuse_encode_for_repg: bool = False,
+                 cfg_noise_hidden: bool = False,
                  recycle_t_fix: float | None = None,
                  cfg_scale: float = 1.0,
-                 hidden_rep_guidance: float = 1.0) -> Path | None:
+                 hidden_rep_guidance: float = 1.0,
+                 autoguidance_config: str | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -174,6 +177,14 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                     matches = [m for m in matches if "-sharednoise" in m.parent.name]
                 else:
                     matches = [m for m in matches if "-sharednoise" not in m.parent.name]
+                if reground_reuse_encode_for_repg:
+                    matches = [m for m in matches if "-reuserepg" in m.parent.name]
+                else:
+                    matches = [m for m in matches if "-reuserepg" not in m.parent.name]
+                if cfg_noise_hidden:
+                    matches = [m for m in matches if "-cfgnoiseh" in m.parent.name]
+                else:
+                    matches = [m for m in matches if "-cfgnoiseh" not in m.parent.name]
                 if num_steps and len(matches) > 1:
                     step_matches = [m for m in matches if f"-{num_steps}-" in m.parent.name]
                     if step_matches:
@@ -244,6 +255,21 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                 no_hrg = [m for m in matches if "-hrg" not in m.parent.name]
                 if no_hrg:
                     matches = no_hrg
+            # Autoguidance filter: when an autoguidance config is specified, narrow
+            # to folders containing the matching -ag_<basename> tag (produced by
+            # inference.py for YAML-config-based autoguidance). When unspecified,
+            # exclude any folder containing -ag so a no-autoguidance run never
+            # picks up an autoguidance-on directory.
+            if autoguidance_config:
+                ag_basename = Path(autoguidance_config).stem.replace('.', 'p')
+                ag_tag = f"-ag_{ag_basename}"
+                ag_matches = [m for m in matches if ag_tag in m.parent.name]
+                if ag_matches:
+                    matches = ag_matches
+            else:
+                no_ag = [m for m in matches if "-ag" not in m.parent.name]
+                if no_ag:
+                    matches = no_ag
         if matches:
             return matches[0]
     return None
@@ -291,6 +317,10 @@ def main():
                         help="Set if inference was run with --reground_fixed_cond_noise.")
     parser.add_argument("--reground_shared_noise", action="store_true", default=False,
                         help="Set if inference was run with --reground_shared_noise.")
+    parser.add_argument("--reground_reuse_encode_for_repg", action="store_true", default=False,
+                        help="Set if inference was run with --reground_reuse_encode_for_repg.")
+    parser.add_argument("--cfg_noise_hidden", action="store_true", default=False,
+                        help="Set if inference was run with --cfg_noise_hidden.")
     parser.add_argument("--recycle_t_fix", type=float, default=None,
                         help="t_fix for recycle mode (e.g. 0.9).")
     parser.add_argument("--cfg_scale", type=float, default=1.0,
@@ -301,6 +331,11 @@ def main():
                         help="Hidden representation guidance scale (default 1.0 = off). "
                              "When >1.0, only folders with the matching -hrgX.X "
                              "tag are considered.")
+    parser.add_argument("--autoguidance_config", type=str, default=None,
+                        help="Path to the autoguidance config YAML used at inference. "
+                             "When set, only folders with the matching -ag_<basename> "
+                             "tag are considered; when unset, autoguidance-on folders "
+                             "are excluded.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -319,9 +354,12 @@ def main():
                            reground_fixed_enc_noise=args.reground_fixed_enc_noise,
                            reground_fixed_cond_noise=args.reground_fixed_cond_noise,
                            reground_shared_noise=args.reground_shared_noise,
+                           reground_reuse_encode_for_repg=args.reground_reuse_encode_for_repg,
+                           cfg_noise_hidden=args.cfg_noise_hidden,
                            recycle_t_fix=args.recycle_t_fix,
                            cfg_scale=args.cfg_scale,
-                           hidden_rep_guidance=args.hidden_rep_guidance)
+                           hidden_rep_guidance=args.hidden_rep_guidance,
+                           autoguidance_config=args.autoguidance_config)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -353,9 +391,12 @@ def main():
         "reground_fixed_enc_noise":  args.reground_fixed_enc_noise,
         "reground_fixed_cond_noise": args.reground_fixed_cond_noise,
         "reground_shared_noise":    args.reground_shared_noise,
+        "reground_reuse_encode_for_repg": args.reground_reuse_encode_for_repg,
+        "cfg_noise_hidden":       args.cfg_noise_hidden,
         "recycle_t_fix":          args.recycle_t_fix,
         "cfg_scale":              args.cfg_scale,
         "hidden_rep_guidance":    args.hidden_rep_guidance,
+        "autoguidance_config":    args.autoguidance_config,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

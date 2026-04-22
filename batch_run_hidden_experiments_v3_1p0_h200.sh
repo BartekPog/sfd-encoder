@@ -41,16 +41,27 @@ echo ""
 
 # ---- From SFD 1p0 4M checkpoint (new configs) ----
 
-echo ">>> 1p0 FT: MSE 0.0001, noisy enc, no curriculum, shift 1.0, repg 1.5 (6x H200)"
-bash run_train_slurm_h200.sh configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml "${NUM_CHAINS}" 6
-echo ""
+# echo ">>> 1p0 FT: MSE 0.0001, noisy enc, no curriculum, shift 1.0, repg 1.5 (6x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5.yaml "${NUM_CHAINS}" 6
+# echo ""
 
 
 # echo ">>> 1p0 FT: Standard fine-tune, no hidden (2x H200)"
 # bash run_train_slurm_h200.sh configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden.yaml "${NUM_CHAINS}" 2
 # echo ""
 
+# ---- HGD-only + LR warmup (from full 4M checkpoint with optimizer state) ----
+
+# echo ">>> 1p0 FT: MSE 0.0001, noisy enc, no curriculum, shift 1.0, no repg, HGD 5, LR warmup 8K (6x H200)"
+# bash run_train_slurm_h200.sh configs/sfd/hidden_1p0_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_no_repg_hgd_5.yaml "${NUM_CHAINS}" 6
+# echo ""
+
+echo ">>> 1p0 FT: Standard fine-tune, no hidden, LR warmup 8K (2x H200)"
+bash run_train_slurm_h200.sh configs/sfd/hidden_1p0_h200_from_ft/finetune_no_hidden_warm8k.yaml "${NUM_CHAINS}" 2
+echo ""
+
 echo "============================================="
 echo "  All V3 (1p0B) experiments submitted!"
 echo "  Monitor with:  squeue -u \$USER"
 echo "============================================="
+

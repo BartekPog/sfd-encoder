@@ -1,0 +1,12 @@
+0	|1.0|0.1|1.0
+1	|1.0|0.4|1.0
+2	|1.0|0.8|1.0
+3	configs/sfd/autoguidance_b/inference_ft.yaml|1.4|0.1|1.0
+4	configs/sfd/autoguidance_b/inference_ft.yaml|1.4|0.4|1.0
+5	configs/sfd/autoguidance_b/inference_ft.yaml|1.4|0.8|1.0
+6	configs/sfd/autoguidance_b/inference_ft.yaml|1.4|0.1|1.2
+7	configs/sfd/autoguidance_b/inference_ft.yaml|1.4|0.4|1.2
+8	configs/sfd/autoguidance_b/inference_ft.yaml|1.4|0.8|1.2
+9	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|1.4|0.1|1.0
+10	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|1.4|0.4|1.0
+11	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|1.4|0.8|1.0

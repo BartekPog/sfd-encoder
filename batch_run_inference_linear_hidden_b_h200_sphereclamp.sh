@@ -66,6 +66,10 @@ INFERENCE_OUTPUT_DIR="outputs/inference"
 
 # ---- Hidden-token experiment definitions ----
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
+# Override via env: EXPERIMENTS_OVERRIDE="config.yaml|exp_name" bash ...
+if [ -n "${EXPERIMENTS_OVERRIDE:-}" ]; then
+    EXPERIMENTS=("${EXPERIMENTS_OVERRIDE}")
+else
 EXPERIMENTS=(
     # ---- V2 experiments ----
     # "configs/sfd/hidden_b_h200/v2_base_mse02.yaml|v2_base_mse02"
@@ -144,6 +148,7 @@ EXPERIMENTS=(
 
     # "configs/sfd/hidden_b_h200_from_ft/v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged.yaml|v4_mse0001_noisy_enc_nocurr_shift1_repg_1p5_merged"
 )
+fi
 
 echo "============================================="
 echo "  B-size H200 — FID50K Inference (LINEAR hidden schedule + SPHERE CLAMP)"

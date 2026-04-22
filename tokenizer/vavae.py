@@ -69,15 +69,22 @@ class VA_VAE:
             posterior = self.model.encode(images.cuda())
             return posterior.sample()
 
-    def decode_to_images(self, z):
+    def decode_to_images(self, z, max_decode_bs=64):
         """Decode latent representations to images
         Args:
             z: Latent representation tensor
+            max_decode_bs: Maximum batch size for VAE decode to avoid OOM.
+                The VAE decoder upsamples 16×16→256×256 with large intermediate
+                activations, so it needs smaller batches than the DiT forward.
         Returns:
             np.ndarray: Decoded image array
         """
         with torch.no_grad():
-            images = self.model.decode(z.cuda())
+            if z.shape[0] <= max_decode_bs:
+                images = self.model.decode(z.cuda())
+            else:
+                chunks = [z[i:i + max_decode_bs] for i in range(0, z.shape[0], max_decode_bs)]
+                images = torch.cat([self.model.decode(c.cuda()) for c in chunks], dim=0)
             images = torch.clamp(127.5 * images + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
         return images
 

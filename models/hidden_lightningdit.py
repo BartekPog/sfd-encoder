@@ -153,7 +153,7 @@ class HiddenLightningDiT(LightningDiT):
         return _HiddenSafeRoPE(n_img, freqs_cos, freqs_sin)
 
     def forward(self, x, t=None, y=None, x_hidden=None, t_hidden=None,
-                encode_mode=False):
+                force_drop_ids=None, encode_mode=False):
         """
         Forward pass of HiddenLightningDiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -167,7 +167,7 @@ class HiddenLightningDiT(LightningDiT):
         """
         # Backward compatibility: no hidden tokens -> use base class forward
         if x_hidden is None:
-            return super().forward(x, t, y)
+            return super().forward(x, t, y, force_drop_ids=force_drop_ids)
 
         use_checkpoint = self.use_checkpoint
 
@@ -204,7 +204,7 @@ class HiddenLightningDiT(LightningDiT):
         if not self.share_timestep_embedder:
             t_hid_emb = self.t_embedder_hid(t_hidden)  # (N, D)
 
-        y = self.y_embedder(y, self.training)  # (N, D)
+        y = self.y_embedder(y, self.training, force_drop_ids=force_drop_ids)  # (N, D)
 
         # Per-token conditioning: image tokens get their own timestep, hidden tokens get theirs.
         # Both groups share the class label y.

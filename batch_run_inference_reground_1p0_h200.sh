@@ -28,7 +28,7 @@
 
 set -euo pipefail
 
-CKPT_STEP=${1:-60000}
+CKPT_STEP=${1:-80000}
 CKPT_NAME=$(printf "%07d" "${CKPT_STEP}")
 
 # ---- SLURM settings (H200 cluster / DAIS) ----
@@ -38,7 +38,7 @@ GPUS="h200:${NUM_GPUS}"
 MEM="180G"
 CPUS_PER_TASK=4
 PRECISION="bf16"
-PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-512}
+PER_PROC_BATCH_SIZE=${PER_PROC_BATCH_SIZE:-2048}
 
 # ---- Guidance overrides (off by default; matches SFD best-FID setup when enabled) ----
 CFG_SCALE=${CFG_SCALE:-1.0}                       # 1.0 = off; 1.5 = SFD best
@@ -64,14 +64,31 @@ INFERENCE_OUTPUT_DIR="outputs/inference"
 # ---- Number of ODE steps ----
 NUM_STEPS_VALUES=(100)
 
-# ---- t_fix values to sweep ----
-# T_FIX_VALUES=(0.8 0.85 0.88 0.9 0.92)
-T_FIX_VALUES=( 0.5 0.6 0.75 0.8 0.85 0.9)
+# ---- t_fix values to sweep (override via env: T_FIX_VALUES="0.6" bash ...) ----
+if [ -n "${T_FIX_VALUES_OVERRIDE:-}" ]; then
+    read -ra T_FIX_VALUES <<< "${T_FIX_VALUES_OVERRIDE}"
+else
+    T_FIX_VALUES=(0.4 0.5 0.6 0.75 0.8 0.9)
+fi
 
 # ---- Fixed-noise flags for reground ----
 REGROUND_FIXED_ENC_NOISE=${REGROUND_FIXED_ENC_NOISE:-true} # Here we keep the encoder noise fixed to isolate the effect of the reground noise
 REGROUND_FIXED_COND_NOISE=${REGROUND_FIXED_COND_NOISE:-false}
 REGROUND_SHARED_NOISE=${REGROUND_SHARED_NOISE:-false}
+# When true, reuse the encode-pass image velocity as the rep-guidance unconditional
+# pass instead of issuing a separate forward call. Saves one forward per ODE step
+# when --hidden_rep_guidance > 1.0.
+REGROUND_REUSE_ENCODE_FOR_REPG=${REGROUND_REUSE_ENCODE_FOR_REPG:-false}
+
+# When true, the pure-CFG negative pass uses fully noised hidden tokens (random
+# noise, t_h=0) instead of re-grounded hidden, making it truly unconditional.
+CFG_NOISE_HIDDEN=${CFG_NOISE_HIDDEN:-false}
+
+# ---- Autoguidance config (for CFG negative pass) ----
+# When set to a YAML config path, the inference loads that checkpoint as the
+# autoguidance (negative) model. Required when CFG_SCALE > 1.0 — pure CFG
+# without an autoguidance model is a no-op in the new reground guidance pipeline.
+AUTOGUIDANCE_CONFIG=${AUTOGUIDANCE_CONFIG:-}
 
 # ---- Hidden-token experiment definitions ----
 # Format: "config_yaml|train_exp_name[|ckpt_step_override]"
@@ -88,8 +105,11 @@ echo "  t_fix sweep: ${T_FIX_VALUES[*]}"
 echo "  Fixed enc noise: ${REGROUND_FIXED_ENC_NOISE}"
 echo "  Fixed cond noise: ${REGROUND_FIXED_COND_NOISE}"
 echo "  Shared noise: ${REGROUND_SHARED_NOISE}"
+echo "  Reuse encode for repg: ${REGROUND_REUSE_ENCODE_FOR_REPG}"
 echo "  CFG scale: ${CFG_SCALE}"
+echo "  CFG noise hidden: ${CFG_NOISE_HIDDEN}"
 echo "  Hidden rep guidance: ${HIDDEN_REP_GUIDANCE}"
+echo "  Autoguidance config: ${AUTOGUIDANCE_CONFIG:-<none>}"
 echo "  Batch size: ${PER_PROC_BATCH_SIZE}"
 echo "  GPUs: ${NUM_GPUS} x H200"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
@@ -135,9 +155,32 @@ for T_FIX in "${T_FIX_VALUES[@]}"; do
             EXTRA_SAVE_FLAGS+=" --reground_shared_noise"
             FIXNOISE_TAG+="_shared"
         fi
+        if [ "${REGROUND_REUSE_ENCODE_FOR_REPG}" = "true" ]; then
+            EXTRA_INFER_FLAGS+=" --reground_reuse_encode_for_repg"
+            EXTRA_SAVE_FLAGS+=" --reground_reuse_encode_for_repg"
+            FIXNOISE_TAG+="_reuserepg"
+        fi
+        if [ "${CFG_NOISE_HIDDEN}" = "true" ]; then
+            EXTRA_INFER_FLAGS+=" --cfg_noise_hidden"
+            EXTRA_SAVE_FLAGS+=" --cfg_noise_hidden"
+            FIXNOISE_TAG+="_cfgnoiseh"
+        fi
 
-        JOBSCRIPT="jobs/infer_1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
-        OUTPUT="job_outputs/infer_1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
+        # Autoguidance config: enables autoguidance via OmegaConf overrides on
+        # the run_inference.sh CLI, and is passed to save_fid_result.py for
+        # folder filtering.
+        AUTOG_INFER_OVERRIDE=""
+        AUTOG_SAVE_FLAGS=""
+        AUTOG_TAG=""
+        if [ -n "${AUTOGUIDANCE_CONFIG}" ]; then
+            AUTOG_INFER_OVERRIDE=" sample.autoguidance=true sample.autoguidance_config=${AUTOGUIDANCE_CONFIG}"
+            AUTOG_SAVE_FLAGS+=" --autoguidance_config ${AUTOGUIDANCE_CONFIG}"
+            AUTOG_BASENAME=$(basename "${AUTOGUIDANCE_CONFIG}" .yaml | tr '.' 'p')
+            AUTOG_TAG="_ag_${AUTOG_BASENAME}"
+        fi
+
+        JOBSCRIPT="jobs/infer_1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}${AUTOG_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.sh"
+        OUTPUT="job_outputs/infer_1p0_rg_s${NUM_STEPS}_t${T_FIX_TAG}${FIXNOISE_TAG}${GUIDE_TAG}${AUTOG_TAG}_${EXP_LABEL}_${EXP_CKPT_NAME}.o%J"
         mkdir -p "$(dirname "${JOBSCRIPT}")"
         mkdir -p "$(dirname "${OUTPUT}")"
 
@@ -171,7 +214,7 @@ GPUS_PER_NODE=${NUM_GPUS} PRECISION=${PRECISION} \\
     sample.fid_num=50000 \\
     sample.balanced_sampling=true \\
     train.output_dir=${INFERENCE_OUTPUT_DIR} \\
-    train.exp_name=${INFER_EXP_NAME} \\
+    train.exp_name=${INFER_EXP_NAME}${AUTOG_INFER_OVERRIDE} \\
     --encode_reground_t_fix ${T_FIX} \\
     --hidden_sphere_clamp${EXTRA_INFER_FLAGS}${GUIDE_INFER_FLAGS}
 python save_fid_result.py \\
@@ -182,7 +225,7 @@ python save_fid_result.py \\
     --sampler euler \\
     --num_steps ${NUM_STEPS} \\
     --hidden_sphere_clamp \\
-    --encode_reground_t_fix ${T_FIX}${EXTRA_SAVE_FLAGS}${GUIDE_SAVE_FLAGS}
+    --encode_reground_t_fix ${T_FIX}${EXTRA_SAVE_FLAGS}${GUIDE_SAVE_FLAGS}${AUTOG_SAVE_FLAGS}
 echo -n 'finished: '; date '+%Y-%m-%d %H:%M:%S'
 SLURM_EOF
 

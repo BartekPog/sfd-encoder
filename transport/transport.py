@@ -345,6 +345,7 @@ class Transport:
         hidden_reuse_noise_pass3=False,
         hidden_clean_only_pass2=False,
         hidden_dropout_prob=0.0,
+        sync_class_dropout=False,
         encoder_model=None,
     ):
         """
@@ -421,6 +422,13 @@ class Transport:
         else:
             drop_mask = None
 
+        force_drop_ids = None
+        if sync_class_dropout and ("y" in model_kwargs):
+            y_embedder = getattr(m, "y_embedder", None)
+            p = getattr(y_embedder, "dropout_prob", 0.0) if y_embedder is not None else 0.0
+            if p > 0:
+                force_drop_ids = (th.rand(B, device=device) < p).to(th.int64)
+
         # ============ PASS 1: Encode ============
         # Convention: x_t = t * x1 + (1-t) * x0, where x0=noise, x1=clean data
         #   t=0 → pure noise, t=1 → clean data
@@ -475,9 +483,15 @@ class Transport:
             xt_encode = x1  # clean image
 
         model_for_encode = encoder_model if encoder_model is not None else m
-        pass1_out = model_for_encode(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
-                      t_hidden=t_encode_hid,
-                      encode_mode=use_encode_mode_emb, **model_kwargs)
+        pass1_out = model_for_encode(
+            xt_encode,
+            t=t_encode_img_for_model,
+            x_hidden=x0_h,
+            t_hidden=t_encode_hid,
+            force_drop_ids=force_drop_ids,
+            encode_mode=use_encode_mode_emb,
+            **model_kwargs,
+        )
         h_velocity = pass1_out[1]
         h_clean = x0_h + h_velocity
 
@@ -552,8 +566,14 @@ class Transport:
 
             # Use unwrapped model for Pass 3 (avoids multiple DDP forwards;
             # backward_fn uses no_sync to defer gradient allreduce to Pass 2)
-            pass3_out = m(xt_img_detached, t=t_img_detached, x_hidden=xt_h3,
-                          t_hidden=t_h3, **model_kwargs)
+            pass3_out = m(
+                xt_img_detached,
+                t=t_img_detached,
+                x_hidden=xt_h3,
+                t_hidden=t_h3,
+                force_drop_ids=force_drop_ids,
+                **model_kwargs,
+            )
             h_pred3 = pass3_out[1]
 
             hidden_loss_unreduced = (h_pred3 - ut_h3) ** 2
@@ -616,11 +636,23 @@ class Transport:
         # Forward pass 2: predict image and hidden velocities
         if use_repa:
             assert feature_dino is not None
-            img_pred, h_pred, repa_feat_proj = model(xt_img, t=t_img_for_model, x_hidden=xt_h,
-                                                     t_hidden=t_h, **model_kwargs)
+            img_pred, h_pred, repa_feat_proj = model(
+                xt_img,
+                t=t_img_for_model,
+                x_hidden=xt_h,
+                t_hidden=t_h,
+                force_drop_ids=force_drop_ids,
+                **model_kwargs,
+            )
         else:
-            img_pred, h_pred = model(xt_img, t=t_img_for_model, x_hidden=xt_h,
-                                     t_hidden=t_h, **model_kwargs)
+            img_pred, h_pred = model(
+                xt_img,
+                t=t_img_for_model,
+                x_hidden=xt_h,
+                t_hidden=t_h,
+                force_drop_ids=force_drop_ids,
+                **model_kwargs,
+            )
 
         # ============ Hidden-conditioning guidance (amplified target) ============
         # When hidden_guidance_scale > 1, construct a target that overshoots v_gt
@@ -634,9 +666,13 @@ class Transport:
             t_h_uncond = th.zeros(B, device=device)
             with th.no_grad():
                 v_uncond_img = m(
-                    xt_img.detach(), t=t_img_for_model if not isinstance(t_img_for_model, tuple)
+                    xt_img.detach(),
+                    t=t_img_for_model if not isinstance(t_img_for_model, tuple)
                     else tuple(t.detach() for t in t_img_for_model),
-                    x_hidden=h_uncond, t_hidden=t_h_uncond, **model_kwargs
+                    x_hidden=h_uncond,
+                    t_hidden=t_h_uncond,
+                    force_drop_ids=force_drop_ids,
+                    **model_kwargs,
                 )[0]
             w_guidance = 1.0 + (hidden_guidance_scale - 1.0) * t_h.view(B, 1, 1, 1)
             ut_img_guided = v_uncond_img + w_guidance * (ut_img - v_uncond_img)
@@ -706,6 +742,7 @@ class Transport:
         hidden_guidance_scale=1.0,
         hidden_reuse_noise_pass2=False,
         hidden_reuse_noise_pass3=False,
+        sync_class_dropout=False,
     ):
         """
         Two-pass self-encoder training with merged image + hidden denoising.
@@ -775,6 +812,13 @@ class Transport:
         B = x1.shape[0]
         device = x1.device
 
+        force_drop_ids = None
+        if sync_class_dropout and ("y" in model_kwargs):
+            y_embedder = getattr(m, "y_embedder", None)
+            p = getattr(y_embedder, "dropout_prob", 0.0) if y_embedder is not None else 0.0
+            if p > 0:
+                force_drop_ids = (th.rand(B, device=device) < p).to(th.int64)
+
         # ============ PASS 1: Encode ============
         x0_h = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
         t_encode_hid = th.zeros(B, device=device)
@@ -820,9 +864,15 @@ class Transport:
             xt_encode = x1
 
         # Use unwrapped model for Pass 1
-        pass1_out = m(xt_encode, t=t_encode_img_for_model, x_hidden=x0_h,
-                      t_hidden=t_encode_hid,
-                      encode_mode=use_encode_mode_emb, **model_kwargs)
+        pass1_out = m(
+            xt_encode,
+            t=t_encode_img_for_model,
+            x_hidden=x0_h,
+            t_hidden=t_encode_hid,
+            force_drop_ids=force_drop_ids,
+            encode_mode=use_encode_mode_emb,
+            **model_kwargs,
+        )
         h_velocity = pass1_out[1]
         h_clean = x0_h + h_velocity  # reconstruct clean encoding
 
@@ -888,13 +938,23 @@ class Transport:
         # Single forward pass: predict image velocity + hidden velocity
         if use_repa:
             assert feature_dino is not None
-            img_pred, h_pred, repa_feat_proj = model(xt_img, t=t_img_for_model,
-                                                     x_hidden=xt_h, t_hidden=t_h,
-                                                     **model_kwargs)
+            img_pred, h_pred, repa_feat_proj = model(
+                xt_img,
+                t=t_img_for_model,
+                x_hidden=xt_h,
+                t_hidden=t_h,
+                force_drop_ids=force_drop_ids,
+                **model_kwargs,
+            )
         else:
-            img_pred, h_pred = model(xt_img, t=t_img_for_model,
-                                     x_hidden=xt_h, t_hidden=t_h,
-                                     **model_kwargs)
+            img_pred, h_pred = model(
+                xt_img,
+                t=t_img_for_model,
+                x_hidden=xt_h,
+                t_hidden=t_h,
+                force_drop_ids=force_drop_ids,
+                **model_kwargs,
+            )
 
         # --- Hidden-conditioning guidance (amplified target) ---
         if hidden_guidance_scale > 1.0:
@@ -902,9 +962,13 @@ class Transport:
             t_h_uncond = th.zeros(B, device=device)
             with th.no_grad():
                 v_uncond_img = m(
-                    xt_img.detach(), t=t_img_for_model if not isinstance(t_img_for_model, tuple)
+                    xt_img.detach(),
+                    t=t_img_for_model if not isinstance(t_img_for_model, tuple)
                     else tuple(t.detach() for t in t_img_for_model),
-                    x_hidden=h_uncond, t_hidden=t_h_uncond, **model_kwargs
+                    x_hidden=h_uncond,
+                    t_hidden=t_h_uncond,
+                    force_drop_ids=force_drop_ids,
+                    **model_kwargs,
                 )[0]
             w_guidance = 1.0 + (hidden_guidance_scale - 1.0) * t_h.view(B, 1, 1, 1)
             ut_img_guided = v_uncond_img + w_guidance * (ut_img - v_uncond_img)
@@ -1446,8 +1510,13 @@ class Sampler:
         reground_fixed_enc_noise=False,
         reground_fixed_cond_noise=False,
         reground_shared_noise=False,
+        reground_reuse_encode_for_repg=False,
         recycle_t_fix=None,
         collect_hidden_trajectory=False,
+        cfg_scale=1.0,
+        autoguidance_model=None,
+        null_class_label=1000,
+        cfg_noise_hidden=False,
     ):
         """
         Returns a sampling function for joint image + hidden token ODE with
@@ -1524,13 +1593,33 @@ class Sampler:
             t_tuple = (t_tex, t_sem)
 
             # ----------------------------------------------------------------
-            # "reground" schedule: two model calls per step.
-            # Call 1 — encode h_clean from current x_img + pure-noise hidden.
-            # Call 2 — denoise image conditioned on the re-grounded h_clean.
-            # The hidden ODE state is never evolved (zero velocity returned).
+            # "reground" schedule: 2-3 model calls per step, single batch.
+            #
+            # Guidance (CFG/autoguidance/repg) is assembled inside this branch
+            # rather than via model.forward_with_cfg, so the encode pass never
+            # sees a doubled CFG batch (which would otherwise cause the cond
+            # and uncond halves to compute different h_clean from different
+            # class conditioning — diluting the eventual guidance signal).
+            #
+            # Pass layout:
+            #   1. Encode pass (single batch, plain forward, conditional y):
+            #      → h_clean for the conditioning pass
+            #      → also serves as v_repg_uncond when reground_reuse_encode_for_repg=True
+            #   2. Conditioning pass: image denoising with re-grounded hidden → v_main
+            #   3. Optional repg uncond pass: skipped if reused from encode pass
+            #   4. Optional autoguidance pass: separate (degraded/no-hidden) model
+            #
+            # Combined velocity:
+            #   v = v_main
+            #     + (cfg_scale - 1)        * (v_main - v_autog)         if cfg_scale > 1
+            #     + (hidden_rep_guidance-1) * (v_main - v_repg_uncond)  if repg > 1
+            #
+            # NOTE: this changes the historical reground repg weight from
+            #   w = 1 + (s-1) * t_fix   →   w = 1 + (s-1)
+            # so existing reground+repg numbers will shift slightly.
             # ----------------------------------------------------------------
             if hidden_schedule == "reground":
-                # Call 1: encode
+                # ----- Pass 1: encode -----
                 if reground_fixed_enc_noise and "enc_noise" in _reground_cache:
                     x0_h_enc = _reground_cache["enc_noise"]
                 else:
@@ -1540,6 +1629,10 @@ class Sampler:
                 t_h_enc = th.zeros(B, device=device)
                 enc_result = model(x_img, t=t_tuple, x_hidden=x0_h_enc,
                                    t_hidden=t_h_enc, **model_kwargs)
+                # enc_result[0] is the image velocity at (x_img, noise hidden, t_h=0)
+                # — exactly the inputs the repg uncond pass would use. Cache it
+                # when reuse is requested to skip a redundant forward.
+                img_vel_repg_uncond = enc_result[0] if reground_reuse_encode_for_repg else None
                 h_clean = x0_h_enc + enc_result[1]
                 if normalize_hidden:
                     h_clean = h_clean / h_clean.norm(dim=-1, keepdim=True).clamp(min=1e-6)
@@ -1558,23 +1651,63 @@ class Sampler:
                 xt_h = hidden_reground_t_fix * h_clean + (1.0 - hidden_reground_t_fix) * x0_h_cond
                 t_hid_cond = th.full((B,), hidden_reground_t_fix, device=device)
 
-                # Call 2: image denoising conditioned on re-grounded hidden
-                result = model(x_img, t=t_tuple, x_hidden=xt_h,
-                               t_hidden=t_hid_cond, **model_kwargs)
-                img_vel = result[0]
+                # ----- Pass 2: conditioning (v_main) -----
+                cond_result = model(x_img, t=t_tuple, x_hidden=xt_h,
+                                    t_hidden=t_hid_cond, **model_kwargs)
+                img_vel = cond_result[0]
 
-                # Optional hidden-representation guidance (amplify away from uncond)
+                # ----- Pass 3 (optional): hidden representation guidance -----
+                # ----- Pass 4 (optional): classifier-free / autoguidance -----
+                # Both guidance terms are computed as deltas from the original
+                # v_main and summed additively to avoid cross-terms:
+                #   v = v_main
+                #     + (repg - 1) * (v_main - v_repg_uncond)
+                #     + (cfg  - 1) * (v_main - v_neg)
+                img_vel_main = img_vel  # save before modification
+
                 if hidden_rep_guidance > 1.0:
-                    h_uncond = th.randn(B, num_hidden_tokens, hidden_token_dim,
-                                        device=device)
-                    t_h_uncond = th.zeros(B, device=device)
-                    result_uncond = model(x_img, t=t_tuple, x_hidden=h_uncond,
-                                          t_hidden=t_h_uncond, **model_kwargs)
-                    img_vel_uncond = result_uncond[0]
-                    w = 1.0 + (hidden_rep_guidance - 1.0) * hidden_reground_t_fix
-                    img_vel = img_vel_uncond + w * (img_vel - img_vel_uncond)
+                    if img_vel_repg_uncond is None:
+                        h_uncond = th.randn(B, num_hidden_tokens, hidden_token_dim,
+                                            device=device)
+                        t_h_uncond = th.zeros(B, device=device)
+                        repg_result = model(x_img, t=t_tuple, x_hidden=h_uncond,
+                                            t_hidden=t_h_uncond, **model_kwargs)
+                        img_vel_repg_uncond = repg_result[0]
+                    img_vel = img_vel + (hidden_rep_guidance - 1.0) * (img_vel_main - img_vel_repg_uncond)
 
-                # Semantic-first image velocity masking
+                if cfg_scale > 1.0:
+                    if autoguidance_model is not None:
+                        if hasattr(autoguidance_model, 'num_hidden_tokens'):
+                            # (a) Hidden autoguidance: mirror the conditioning pass.
+                            autog_result = autoguidance_model(
+                                x_img, t=t_tuple, x_hidden=xt_h,
+                                t_hidden=t_hid_cond, **model_kwargs)
+                        else:
+                            # (b) No-hidden autoguidance (e.g. base SFD checkpoint):
+                            autog_result = autoguidance_model(
+                                x_img, t=t_tuple, **model_kwargs)
+                    else:
+                        # (c) Pure CFG: same model with the null class label.
+                        y_cond = model_kwargs['y']
+                        y_null = th.full_like(y_cond, null_class_label)
+                        null_kwargs = {**model_kwargs, 'y': y_null}
+                        if cfg_noise_hidden:
+                            # Fully noise hidden tokens for the negative pass so
+                            # CFG captures the full conditioning effect (class + hidden).
+                            h_cfg_neg = th.randn(B, num_hidden_tokens, hidden_token_dim,
+                                                 device=device)
+                            t_h_cfg_neg = th.zeros(B, device=device)
+                            autog_result = model(
+                                x_img, t=t_tuple, x_hidden=h_cfg_neg,
+                                t_hidden=t_h_cfg_neg, **null_kwargs)
+                        else:
+                            autog_result = model(
+                                x_img, t=t_tuple, x_hidden=xt_h,
+                                t_hidden=t_hid_cond, **null_kwargs)
+                    img_vel_autog = autog_result[0] if isinstance(autog_result, tuple) else autog_result
+                    img_vel = img_vel + (cfg_scale - 1.0) * (img_vel_main - img_vel_autog)
+
+                # Semantic-first image velocity masking (applied once to final v)
                 img_mask = th.zeros_like(x_img)
                 img_mask[:, :texture_chans, ...] = (t >= semfirst_delta_t).view(
                     B, 1, *[1] * (x_img.dim() - 2))

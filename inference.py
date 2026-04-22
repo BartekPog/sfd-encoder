@@ -121,6 +121,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
               encode_first_pass=False, encode_linear_start_t=None,
               encode_fixed_start_t=None, encode_reground_t_fix=None,
               reground_fixed_enc_noise=False, reground_fixed_cond_noise=False, reground_shared_noise=False,
+              reground_reuse_encode_for_repg=False,
+              cfg_noise_hidden=False,
               recycle_t_fix=None,
               save_samples=None):
     """
@@ -239,11 +241,23 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             folder_name += "-fixcond"
         if reground_shared_noise:
             folder_name += "-sharednoise"
+        if reground_reuse_encode_for_repg:
+            folder_name += "-reuserepg"
+        if cfg_noise_hidden:
+            folder_name += "-cfgnoiseh"
     if recycle_t_fix is not None:
         folder_name += f"-recycle{recycle_t_fix:.2f}"
     # Add autoguidance params to folder name
     if use_autoguidance and ag_model_size is not None and ag_ckpt_iter is not None:
         folder_name += f"-ag{ag_model_size}{ag_ckpt_iter}k"
+    elif use_autoguidance:
+        # YAML-config-based autoguidance (no CLI size/iter): tag with config basename
+        _ag_cfg_path = train_config['sample'].get('autoguidance_config', None)
+        if _ag_cfg_path:
+            _ag_cfg_name = os.path.basename(_ag_cfg_path).replace('.yaml', '').replace('.', 'p')
+            folder_name += f"-ag_{_ag_cfg_name}"
+        else:
+            folder_name += "-ag"
     # Add separate sem/tex cfg scale to folder name (only if different from default)
     if use_autoguidance and (cfg_scale_sem is not None or cfg_scale_tex is not None):
         folder_name += f"-cfgsem{effective_cfg_sem:.2f}-cfgtex{effective_cfg_tex:.2f}"
@@ -601,6 +615,11 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             reground_fixed_enc_noise=reground_fixed_enc_noise,
             reground_fixed_cond_noise=reground_fixed_cond_noise,
             reground_shared_noise=reground_shared_noise,
+            reground_reuse_encode_for_repg=reground_reuse_encode_for_repg,
+            cfg_scale=cfg_scale,
+            autoguidance_model=autoguidance_model,
+            null_class_label=train_config['data']['num_classes'],
+            cfg_noise_hidden=cfg_noise_hidden,
         )
         if accelerator.process_index == 0:
             print_with_prefix(f'Encode-reground mode: re-encode h_clean from x_t at each step, '
@@ -608,7 +627,16 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                               f'normalize_hidden={normalize_hidden}, '
                               f'fixed_enc_noise={reground_fixed_enc_noise}, '
                               f'fixed_cond_noise={reground_fixed_cond_noise}, '
-                              f'shared_noise={reground_shared_noise}')
+                              f'shared_noise={reground_shared_noise}, '
+                              f'reuse_encode_for_repg={reground_reuse_encode_for_repg}, '
+                              f'cfg_scale={cfg_scale}, '
+                              f'cfg_noise_hidden={cfg_noise_hidden}, '
+                              f'autoguidance={"on" if autoguidance_model is not None else "off"}, '
+                              f'hidden_rep_guidance={hidden_rep_guidance}')
+            if cfg_scale > 1.0 and autoguidance_model is None:
+                print_with_prefix('NOTE: encode-reground with cfg_scale > 1.0 and no '
+                                  'autoguidance model — using pure CFG (null class label '
+                                  'as negative pass).')
 
     # Recycle mode: single forward pass per step, hidden velocity used to extract
     # h_clean which is re-noised back to recycle_t_fix. No extra forward pass needed.
@@ -935,6 +963,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             elif encode_reground_t_fix is not None:
                 # --- Encode-reground mode ---
                 # No real-image lookup: hidden tokens are re-encoded from x_t at every ODE step.
+                # Guidance (CFG/autoguidance/repg) is assembled inside the transport
+                # function on a single (non-doubled) batch — no forward_with_cfg here.
                 if fixed_class_label is not None:
                     y = torch.tensor([fixed_class_label] * n, device=device)
                 elif use_balanced_sampling:
@@ -949,16 +979,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                 else:
                     y = torch.randint(0, train_config['data']['num_classes'], (n,), device=device)
 
-                if using_cfg:
-                    z = torch.cat([z, z], 0)
-                    y_null = torch.tensor([1000] * n, device=device)
-                    y_cfg = torch.cat([y, y_null], 0)
-                    model_kwargs = dict(y=y_cfg, cfg_scale=cfg_scale, cfg_interval=True,
-                                       cfg_interval_start=cfg_interval_start)
-                    model_fn = model.forward_with_cfg
-                else:
-                    model_kwargs = dict(y=y)
-                    model_fn = model.forward
+                model_kwargs = dict(y=y)
+                model_fn = model.forward
 
                 samples = sample_fn_encode_reground(z, model_fn, **model_kwargs)[-1]
             elif recycle_t_fix is not None:
@@ -1038,7 +1060,7 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
                     samples = sample_fn_pass2(z, model_fn, _z_hidden=h_clean, **model_kwargs)[-1]
                 else:
                     samples = sample_fn(z, model_fn, **model_kwargs)[-1]
-            if using_cfg and autoguidance_model is None:
+            if using_cfg and autoguidance_model is None and encode_reground_t_fix is None:
                 samples, _ = samples.chunk(2, dim=0)  # Remove null class samples (only for standard CFG)
             samples = drop_semantic_chansels(train_config, samples)
             samples = (samples * latent_std) / latent_multiplier + latent_mean
@@ -1134,6 +1156,19 @@ if __name__ == "__main__":
                         help='Encode-reground mode: use the same noise for encoding and '
                              'conditioning. Makes xt_h = x0 + t_fix * v_enc, i.e. stopping '
                              'partway along the encoding flow line. Overrides --reground_fixed_cond_noise.')
+    parser.add_argument('--reground_reuse_encode_for_repg', action='store_true', default=False,
+                        help='Encode-reground mode: when --hidden_rep_guidance > 1.0, reuse '
+                             'the encode-pass image velocity as the rep-guidance unconditional '
+                             'pass instead of issuing a separate forward call. The two have '
+                             'structurally identical inputs (x_img, fresh-noise hidden, t_h=0), '
+                             'so this saves one forward per ODE step. The repg-uncond noise '
+                             'is then coupled to the encode-pass noise (which is fixed when '
+                             '--reground_fixed_enc_noise is also set).')
+    parser.add_argument('--cfg_noise_hidden', action='store_true', default=False,
+                        help='Pure-CFG reground mode: use fully noised hidden tokens (random noise, '
+                             't_h=0) in the negative pass instead of the re-grounded hidden. '
+                             'Makes the negative pass truly unconditional (no class + no hidden info), '
+                             'so CFG captures the full conditioning effect.')
     parser.add_argument('--no_cleanup_samples', action='store_true', default=False,
                         help='Keep PNG sample files after FID calculation. By default, PNGs are '
                              'deleted after FID is computed to save disk space.')
@@ -1225,6 +1260,8 @@ if __name__ == "__main__":
         reground_fixed_enc_noise=args.reground_fixed_enc_noise,
         reground_fixed_cond_noise=args.reground_fixed_cond_noise,
         reground_shared_noise=args.reground_shared_noise,
+        reground_reuse_encode_for_repg=args.reground_reuse_encode_for_repg,
+        cfg_noise_hidden=args.cfg_noise_hidden,
         recycle_t_fix=args.recycle_t_fix,
         save_samples=args.save_samples)
 
@@ -1233,6 +1270,10 @@ if __name__ == "__main__":
         # Important: FID is only for reference, please use ADM evaluation for paper reporting
         if accelerator.process_index == 0:
             for sample_folder_dir in sample_folder_dirs:
+                existing_fid = os.path.join(sample_folder_dir, "fid_result.txt")
+                if os.path.exists(existing_fid):
+                    print_with_prefix(f'FID already computed at {existing_fid}, skipping.')
+                    continue
                 print_with_prefix(f'Calculating FID for {sample_folder_dir}')
                 from tools.calculate_fid import calculate_fid_given_paths
                 print_with_prefix('Calculating FID with {} number of samples'.format(train_config['sample']['fid_num']))

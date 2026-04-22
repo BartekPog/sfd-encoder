@@ -496,7 +496,7 @@ class LightningDiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t=None, y=None):
+    def forward(self, x, t=None, y=None, force_drop_ids=None):
         """
         Forward pass of LightningDiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -526,7 +526,7 @@ class LightningDiT(nn.Module):
             t = torch.cat([t_emb_sem, t_emb_tex], dim=1)  # (N, D)
         else:
             t = self.t_embedder(t)  # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
+        y = self.y_embedder(y, self.training, force_drop_ids=force_drop_ids)    # (N, D)
         c = t + y                                # (N, D)
         
         c = c.unsqueeze(1)                       # (N, 1, D) expand for addition, will be broadcasted in blocks

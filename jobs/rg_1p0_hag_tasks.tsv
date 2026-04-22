@@ -1,0 +1,12 @@
+0	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_40k.yaml|bhrepg40k|0.1|1.3
+1	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_40k.yaml|bhrepg40k|0.1|1.4
+2	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_40k.yaml|bhrepg40k|0.3|1.3
+3	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_40k.yaml|bhrepg40k|0.3|1.4
+4	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_40k.yaml|bhrepg40k|0.5|1.3
+5	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_40k.yaml|bhrepg40k|0.5|1.4
+6	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|bhrepg80k|0.1|1.3
+7	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|bhrepg80k|0.1|1.4
+8	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|bhrepg80k|0.3|1.3
+9	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|bhrepg80k|0.3|1.4
+10	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|bhrepg80k|0.5|1.3
+11	configs/sfd/hidden_b_h200_from_ft/inference_ag_repg_1p5_80k.yaml|bhrepg80k|0.5|1.4
