@@ -98,7 +98,8 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
                  recycle_t_fix: float | None = None,
                  cfg_scale: float = 1.0,
                  hidden_rep_guidance: float = 1.0,
-                 autoguidance_config: str | None = None) -> Path | None:
+                 autoguidance_config: str | None = None,
+                 autoguidance_ckpt_iter: int | None = None) -> Path | None:
     """
     Find fid_result.txt written by inference.py.
     inference.py writes it inside a subfolder named after the run
@@ -263,6 +264,8 @@ def find_fid_txt(output_dir: Path, inference_type: str | None = None,
             if autoguidance_config:
                 ag_basename = Path(autoguidance_config).stem.replace('.', 'p')
                 ag_tag = f"-ag_{ag_basename}"
+                if autoguidance_ckpt_iter is not None:
+                    ag_tag += f"_{autoguidance_ckpt_iter}k"
                 ag_matches = [m for m in matches if ag_tag in m.parent.name]
                 if ag_matches:
                     matches = ag_matches
@@ -336,6 +339,8 @@ def main():
                              "When set, only folders with the matching -ag_<basename> "
                              "tag are considered; when unset, autoguidance-on folders "
                              "are excluded.")
+    parser.add_argument("--autoguidance_ckpt_iter", type=int, default=None,
+                        help="The iteration of the autoguidance checkpoint used.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -359,7 +364,8 @@ def main():
                            recycle_t_fix=args.recycle_t_fix,
                            cfg_scale=args.cfg_scale,
                            hidden_rep_guidance=args.hidden_rep_guidance,
-                           autoguidance_config=args.autoguidance_config)
+                           autoguidance_config=args.autoguidance_config,
+                           autoguidance_ckpt_iter=args.autoguidance_ckpt_iter)
     if fid_txt is None:
         print(f"WARNING: fid_result.txt not found under {output_dir}", file=sys.stderr)
         fid = None
@@ -397,6 +403,7 @@ def main():
         "cfg_scale":              args.cfg_scale,
         "hidden_rep_guidance":    args.hidden_rep_guidance,
         "autoguidance_config":    args.autoguidance_config,
+        "autoguidance_ckpt_iter": args.autoguidance_ckpt_iter,
         "fid50k":                 fid,
         "timestamp":              datetime.now().isoformat(timespec="seconds"),
     }

@@ -60,4 +60,4 @@ accelerate launch \
     --mixed_precision $PRECISION \
     inference.py \
     --config $CONFIG_PATH --calculate-fid \
-    $EXTRA_ARGS $PASSTHROUGH_ARGS
+    $PASSTHROUGH_ARGS $EXTRA_ARGS

@@ -157,10 +157,10 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
             if autoguidance_config_path:
                 # Default: use config file
                 autoguidance_model_size = None
-                autoguidance_ckpt_iter = None
+                autoguidance_ckpt_iter = autoguidance_ckpt_iter[0] if isinstance(autoguidance_ckpt_iter, list) else autoguidance_ckpt_iter
             else:
                 autoguidance_model_size = None
-                autoguidance_ckpt_iter = None
+                autoguidance_ckpt_iter = autoguidance_ckpt_iter[0] if isinstance(autoguidance_ckpt_iter, list) else autoguidance_ckpt_iter
         else:
             # Convert list to single value (take first element if list)
             autoguidance_model_size = autoguidance_model_size[0] if isinstance(autoguidance_model_size, list) else autoguidance_model_size
@@ -256,6 +256,8 @@ def do_sample(train_config, accelerator, ckpt_path=None, cfg_scale=None, cfg_int
         if _ag_cfg_path:
             _ag_cfg_name = os.path.basename(_ag_cfg_path).replace('.yaml', '').replace('.', 'p')
             folder_name += f"-ag_{_ag_cfg_name}"
+            if ag_ckpt_iter is not None:
+                folder_name += f"_{ag_ckpt_iter}k"
         else:
             folder_name += "-ag"
     # Add separate sem/tex cfg scale to folder name (only if different from default)

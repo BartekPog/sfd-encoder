@@ -47,6 +47,9 @@ COLUMN_ORDER = [
     "hidden_same_t_as_img",
     "normalize_hidden",
     "noisy_img_encode",
+    # autoguidance
+    "autoguidance_config",
+    "autoguidance_ckpt_iter",
     # hidden curriculum / gradient scaling
     "hidden_grad_dyn_scale",
     "hidden_grad_static_scale",
@@ -124,15 +127,17 @@ def main():
     print(f"Wrote {len(records)} records → {out_path}")
 
     # Pretty-print summary table
-    print(f"\n{'exp_name':<52} {'type':<8} {'steps':>6} {'FID':>8}")
-    print("-" * 80)
+    print(f"\n{'exp_name':<52} {'type':<8} {'steps':>6} {'FID':>8} {'ag_ckpt_iter':>12}")
+    print("-" * 100)
     for r in records:
         fid_str = f"{r['fid50k']:.4f}" if r.get("fid50k") is not None else "N/A"
         steps = r.get("steps_per_pass") or r.get("num_steps") or "?"
+        ag_ckpt = r.get("autoguidance_ckpt_iter") or "N/A"
         print(f"{r.get('exp_name', '?'):<52} "
               f"{r.get('inference_type', '?'):<8} "
               f"{str(steps):>6} "
-              f"{fid_str:>8}")
+              f"{fid_str:>8} "
+              f"{str(ag_ckpt):>12}")
 
 
 if __name__ == "__main__":

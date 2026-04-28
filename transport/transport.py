@@ -346,6 +346,9 @@ class Transport:
         hidden_clean_only_pass2=False,
         hidden_dropout_prob=0.0,
         sync_class_dropout=False,
+        cfg_repg_dropout=False,
+        p_cfg_drop=0.1,
+        p_repg_drop=0.1,
         encoder_model=None,
     ):
         """
@@ -417,17 +420,34 @@ class Transport:
         B = x1.shape[0]
         device = x1.device
         
-        if hidden_dropout_prob > 0.0:
-            drop_mask = (th.rand(B, device=device) < hidden_dropout_prob).view(B)
+        if cfg_repg_dropout:
+            assert p_cfg_drop + p_repg_drop < 1.0, (
+                f"p_cfg_drop + p_repg_drop must be < 1.0, got "
+                f"{p_cfg_drop} + {p_repg_drop} = {p_cfg_drop + p_repg_drop}"
+            )
+            # Three-way categorical: cond (rest) / repg-only / cfg-both.
+            r = th.rand(B, device=device)
+            cfg_mask = r < p_cfg_drop
+            repg_mask = (r >= p_cfg_drop) & (r < p_cfg_drop + p_repg_drop)
+            drop_mask = cfg_mask | repg_mask
+            # Encoder Pass 1 is always class-conditional: zeros disables drop.
+            enc_force_drop_ids = th.zeros(B, dtype=th.int64, device=device)
+            # Denoiser Pass 2/3: class dropped only for CFG samples.
+            den_force_drop_ids = cfg_mask.to(th.int64)
         else:
-            drop_mask = None
+            if hidden_dropout_prob > 0.0:
+                drop_mask = (th.rand(B, device=device) < hidden_dropout_prob).view(B)
+            else:
+                drop_mask = None
 
-        force_drop_ids = None
-        if sync_class_dropout and ("y" in model_kwargs):
-            y_embedder = getattr(m, "y_embedder", None)
-            p = getattr(y_embedder, "dropout_prob", 0.0) if y_embedder is not None else 0.0
-            if p > 0:
-                force_drop_ids = (th.rand(B, device=device) < p).to(th.int64)
+            force_drop_ids = None
+            if sync_class_dropout and ("y" in model_kwargs):
+                y_embedder = getattr(m, "y_embedder", None)
+                p = getattr(y_embedder, "dropout_prob", 0.0) if y_embedder is not None else 0.0
+                if p > 0:
+                    force_drop_ids = (th.rand(B, device=device) < p).to(th.int64)
+            enc_force_drop_ids = force_drop_ids
+            den_force_drop_ids = force_drop_ids
 
         # ============ PASS 1: Encode ============
         # Convention: x_t = t * x1 + (1-t) * x0, where x0=noise, x1=clean data
@@ -488,7 +508,7 @@ class Transport:
             t=t_encode_img_for_model,
             x_hidden=x0_h,
             t_hidden=t_encode_hid,
-            force_drop_ids=force_drop_ids,
+            force_drop_ids=enc_force_drop_ids,
             encode_mode=use_encode_mode_emb,
             **model_kwargs,
         )
@@ -571,7 +591,7 @@ class Transport:
                 t=t_img_detached,
                 x_hidden=xt_h3,
                 t_hidden=t_h3,
-                force_drop_ids=force_drop_ids,
+                force_drop_ids=den_force_drop_ids,
                 **model_kwargs,
             )
             h_pred3 = pass3_out[1]
@@ -641,7 +661,7 @@ class Transport:
                 t=t_img_for_model,
                 x_hidden=xt_h,
                 t_hidden=t_h,
-                force_drop_ids=force_drop_ids,
+                force_drop_ids=den_force_drop_ids,
                 **model_kwargs,
             )
         else:
@@ -650,7 +670,7 @@ class Transport:
                 t=t_img_for_model,
                 x_hidden=xt_h,
                 t_hidden=t_h,
-                force_drop_ids=force_drop_ids,
+                force_drop_ids=den_force_drop_ids,
                 **model_kwargs,
             )
 
@@ -671,7 +691,7 @@ class Transport:
                     else tuple(t.detach() for t in t_img_for_model),
                     x_hidden=h_uncond,
                     t_hidden=t_h_uncond,
-                    force_drop_ids=force_drop_ids,
+                    force_drop_ids=den_force_drop_ids,
                     **model_kwargs,
                 )[0]
             w_guidance = 1.0 + (hidden_guidance_scale - 1.0) * t_h.view(B, 1, 1, 1)
@@ -743,6 +763,9 @@ class Transport:
         hidden_reuse_noise_pass2=False,
         hidden_reuse_noise_pass3=False,
         sync_class_dropout=False,
+        cfg_repg_dropout=False,
+        p_cfg_drop=0.1,
+        p_repg_drop=0.1,
     ):
         """
         Two-pass self-encoder training with merged image + hidden denoising.
@@ -812,12 +835,27 @@ class Transport:
         B = x1.shape[0]
         device = x1.device
 
-        force_drop_ids = None
-        if sync_class_dropout and ("y" in model_kwargs):
-            y_embedder = getattr(m, "y_embedder", None)
-            p = getattr(y_embedder, "dropout_prob", 0.0) if y_embedder is not None else 0.0
-            if p > 0:
-                force_drop_ids = (th.rand(B, device=device) < p).to(th.int64)
+        if cfg_repg_dropout:
+            assert p_cfg_drop + p_repg_drop < 1.0, (
+                f"p_cfg_drop + p_repg_drop must be < 1.0, got "
+                f"{p_cfg_drop} + {p_repg_drop} = {p_cfg_drop + p_repg_drop}"
+            )
+            r = th.rand(B, device=device)
+            cfg_mask = r < p_cfg_drop
+            repg_mask = (r >= p_cfg_drop) & (r < p_cfg_drop + p_repg_drop)
+            drop_mask = cfg_mask | repg_mask
+            enc_force_drop_ids = th.zeros(B, dtype=th.int64, device=device)
+            den_force_drop_ids = cfg_mask.to(th.int64)
+        else:
+            drop_mask = None
+            force_drop_ids = None
+            if sync_class_dropout and ("y" in model_kwargs):
+                y_embedder = getattr(m, "y_embedder", None)
+                p = getattr(y_embedder, "dropout_prob", 0.0) if y_embedder is not None else 0.0
+                if p > 0:
+                    force_drop_ids = (th.rand(B, device=device) < p).to(th.int64)
+            enc_force_drop_ids = force_drop_ids
+            den_force_drop_ids = force_drop_ids
 
         # ============ PASS 1: Encode ============
         x0_h = th.randn(B, num_hidden_tokens, hidden_token_dim, device=device)
@@ -869,7 +907,7 @@ class Transport:
             t=t_encode_img_for_model,
             x_hidden=x0_h,
             t_hidden=t_encode_hid,
-            force_drop_ids=force_drop_ids,
+            force_drop_ids=enc_force_drop_ids,
             encode_mode=use_encode_mode_emb,
             **model_kwargs,
         )
@@ -917,6 +955,10 @@ class Transport:
             t_h = t_h * (t1_h - t0_h) + t0_h
         else:
             t_h = th.rand(B, device=device) * (t1_h - t0_h) + t0_h
+
+        if drop_mask is not None:
+            t_h = th.where(drop_mask, th.zeros_like(t_h) + t0_h, t_h)
+
         if hidden_grad_dyn_scale > 0.0:
             h_clean = self.dyn_grad_scale(h_clean, t_h, hidden_grad_dyn_scale)
 
@@ -943,7 +985,7 @@ class Transport:
                 t=t_img_for_model,
                 x_hidden=xt_h,
                 t_hidden=t_h,
-                force_drop_ids=force_drop_ids,
+                force_drop_ids=den_force_drop_ids,
                 **model_kwargs,
             )
         else:
@@ -952,7 +994,7 @@ class Transport:
                 t=t_img_for_model,
                 x_hidden=xt_h,
                 t_hidden=t_h,
-                force_drop_ids=force_drop_ids,
+                force_drop_ids=den_force_drop_ids,
                 **model_kwargs,
             )
 
@@ -967,7 +1009,7 @@ class Transport:
                     else tuple(t.detach() for t in t_img_for_model),
                     x_hidden=h_uncond,
                     t_hidden=t_h_uncond,
-                    force_drop_ids=force_drop_ids,
+                    force_drop_ids=den_force_drop_ids,
                     **model_kwargs,
                 )[0]
             w_guidance = 1.0 + (hidden_guidance_scale - 1.0) * t_h.view(B, 1, 1, 1)
@@ -988,14 +1030,19 @@ class Transport:
             img_loss = mean_flat(loss_per_channel)
 
         # --- Hidden denoising loss (target detached, prediction has grad) ---
-        hidden_loss = mean_flat((h_pred - ut_h) ** 2) * hidden_weight * hidden_loss_scale
+        hidden_loss_unreduced = (h_pred - ut_h) ** 2
+        if drop_mask is not None:
+            hidden_loss_unreduced = hidden_loss_unreduced * (~drop_mask).view(B, 1, 1).float()
+        hidden_loss = mean_flat(hidden_loss_unreduced) * hidden_weight * hidden_loss_scale
 
         # --- Optional cosine loss on single-step clean prediction ---
         if hidden_cos_weight > 0:
             h1_pred = xt_h + (1 - t_h_expanded) * h_pred
-            hidden_cos_loss = mean_flat(
-                1 - th.nn.functional.cosine_similarity(h1_pred, h_clean_detached, dim=-1)
-            ) * hidden_cos_weight * hidden_loss_scale
+            hidden_cos_loss_unreduced = 1 - th.nn.functional.cosine_similarity(
+                h1_pred, h_clean_detached, dim=-1)
+            if drop_mask is not None:
+                hidden_cos_loss_unreduced = hidden_cos_loss_unreduced * (~drop_mask).view(B, 1).float()
+            hidden_cos_loss = mean_flat(hidden_cos_loss_unreduced) * hidden_cos_weight * hidden_loss_scale
         else:
             hidden_cos_loss = None
 

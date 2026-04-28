@@ -1,6 +1,6 @@
 ckpt_path: ''
 data:
-  data_path: /dais/fs/scratch/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256
+  data_path: /viper/ptmp2/bpogodzi/hidden-diffusion/datasets/imagenet-sfd-latents/train/sdvae_f16d32_semvaebasech16_repadinov2_vitb14_reg/imagenet_train_256
   fid_reference_file: outputs/ADM_npz/VIRTUAL_imagenet256_labeled.npz
   image_size: 256
   num_classes: 1000

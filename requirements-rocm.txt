@@ -1,0 +1,36 @@
+# =============================================================================
+# Requirements for VIPER-GPU (MI300A, ROCm 6.3).
+#
+# PyTorch is installed separately first with ROCm wheels (compute nodes have
+# no internet, so this must run on a login node):
+#
+#   module purge
+#   module load gcc/14 rocm/6.3 python-waterboa/2025.06
+#   python -m venv .venv-sfd-rocm
+#   source .venv-sfd-rocm/bin/activate
+#   pip install --upgrade pip
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.3
+#   pip install -r requirements-rocm.txt
+#
+# Differences vs. CUDA requirements.txt:
+#   - No --extra-index-url for cu121 wheels (we build against ROCm).
+#   - tensorboard + protobuf pins relaxed (the 2.8.0 / 3.20.3 combo fights the
+#     transitive deps that ship with modern torch). train.py already tolerates
+#     a failed tensorboard import and falls back to a no-op writer.
+#   - diffusers / omegaconf / timm pins relaxed; current releases work.
+# =============================================================================
+
+timm
+diffusers
+accelerate
+torchdiffeq
+pytorch_fid
+tensorboard
+protobuf
+wandb
+omegaconf
+einops
+fairscale
+safetensors
+jaxtyping
+tqdm

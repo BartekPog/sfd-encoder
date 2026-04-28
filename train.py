@@ -146,7 +146,26 @@ def do_train(train_config, accelerator):
 
     # load pretrained model
     weight_init_opt_state = None  # stash opt state for later (optimizer not yet created)
-    if 'weight_init' in train_config['train']:
+    # Skip weight_init when a resume checkpoint already exists — the resume path
+    # below will overwrite model/EMA/opt anyway, and holding both 16 GB+ checkpoints
+    # in CPU RAM simultaneously can OOM the slurmstepd cgroup on unified-memory APUs.
+    resume_ckpt_present = (
+        train_config['train'].get('resume', False)
+        and (
+            os.path.exists(os.path.join(checkpoint_dir, "last.pt"))
+            or any(
+                os.path.basename(p).split('.')[0].isdigit()
+                for p in glob(f"{checkpoint_dir}/*.pt")
+            )
+        )
+    )
+    if 'weight_init' in train_config['train'] and resume_ckpt_present:
+        if accelerator.is_main_process:
+            logger.info(
+                f"Skipping weight_init ({train_config['train']['weight_init']}) "
+                f"because a resume checkpoint exists in {checkpoint_dir}"
+            )
+    if 'weight_init' in train_config['train'] and not resume_ckpt_present:
         checkpoint = load_checkpoint_trusted(
             train_config['train']['weight_init'],
             map_location=lambda storage, loc: storage,
@@ -324,23 +343,41 @@ def do_train(train_config, accelerator):
                     pass
 
         if checkpoint is not None:
-            state_dict = checkpoint['model']
-            # Strip 'module.' prefix when not using DDP (single-GPU)
-            if not _dist_initialized() and any(k.startswith('module.') for k in state_dict):
-                state_dict = {k.replace('module.', '', 1): v for k, v in state_dict.items()}
-            model.load_state_dict(state_dict)
-            ema_state = checkpoint['ema']
-            if any(k.startswith('module.') for k in ema_state):
-                ema_state = {k.replace('module.', '', 1): v for k, v in ema_state.items()}
-            ema.load_state_dict(ema_state)
-            if 'opt' in checkpoint:
-                opt.load_state_dict(checkpoint['opt'])
-                if accelerator.is_main_process:
-                    logger.info(f"Restored optimizer state from checkpoint")
+            # Free each section of the 16 GB+ checkpoint as soon as it's copied
+            # into model/EMA/opt buffers. Otherwise the dict stays live in CPU RAM
+            # through accelerator.prepare and the first DataLoader fork, which on
+            # unified-memory APUs (MI300A) reliably trips the slurmstepd cgroup OOM
+            # killer once dirtied CoW pages multiply across worker forks.
             train_steps = checkpoint.get('train_steps')
             if train_steps is None:
                 base = os.path.basename(latest_checkpoint).split('.')[0]
                 train_steps = int(base) if base.isdigit() else 0
+
+            state_dict = checkpoint.pop('model')
+            # Strip 'module.' prefix when not using DDP (single-GPU)
+            if not _dist_initialized() and any(k.startswith('module.') for k in state_dict):
+                state_dict = {k.replace('module.', '', 1): v for k, v in state_dict.items()}
+            model.load_state_dict(state_dict)
+            del state_dict
+
+            ema_state = checkpoint.pop('ema')
+            if any(k.startswith('module.') for k in ema_state):
+                ema_state = {k.replace('module.', '', 1): v for k, v in ema_state.items()}
+            ema.load_state_dict(ema_state)
+            del ema_state
+
+            has_opt = 'opt' in checkpoint
+            if has_opt:
+                opt_state = checkpoint.pop('opt')
+                opt.load_state_dict(opt_state)
+                del opt_state
+                if accelerator.is_main_process:
+                    logger.info(f"Restored optimizer state from checkpoint")
+
+            del checkpoint
+            import gc
+            gc.collect()
+
             if accelerator.is_main_process:
                 logger.info(f"Resuming training from checkpoint: {latest_checkpoint}")
         else:
@@ -470,6 +507,9 @@ def do_train(train_config, accelerator):
                             hidden_reuse_noise_pass2=hidden_reuse_noise_pass2,
                             hidden_reuse_noise_pass3=hidden_reuse_noise_pass3,
                             sync_class_dropout=train_config['model'].get('sync_class_dropout', False),
+                            cfg_repg_dropout=train_config['model'].get('cfg_repg_dropout', False),
+                            p_cfg_drop=train_config['model'].get('p_cfg_drop', 0.1),
+                            p_repg_drop=train_config['model'].get('p_repg_drop', 0.1),
                         )
                     else:
                         # 3-pass variant: detached hidden denoising (original)
@@ -503,6 +543,9 @@ def do_train(train_config, accelerator):
                             hidden_clean_only_pass2=train_config['model'].get('hidden_clean_only_pass2', False),
                             hidden_dropout_prob=train_config['model'].get('hidden_dropout_prob', 0.0),
                             sync_class_dropout=train_config['model'].get('sync_class_dropout', False),
+                            cfg_repg_dropout=train_config['model'].get('cfg_repg_dropout', False),
+                            p_cfg_drop=train_config['model'].get('p_cfg_drop', 0.1),
+                            p_repg_drop=train_config['model'].get('p_repg_drop', 0.1),
                             encoder_model=encoder_model,
                         )
                 else:
